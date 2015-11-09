@@ -16,7 +16,7 @@ It can take the following parameters:
 
    write debug information to the system log
    
-**realm=<realm>**
+**realm=yourRealm**
 
    pass additional realm to privacyidea
    
