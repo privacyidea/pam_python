@@ -32,31 +32,52 @@ except:
 ssh = pexpect.spawn(command or "ssh", sys.argv[1:])
 winch_handler(None, None)
 
-index = -1
-pattern_list = ssh.compile_pattern_list([
-    "Enter additional factors:.*",
-    "----- BEGIN U2F CHALLENGE -----\r?\n([^\r\n]*)\r?\n(.*)\r?\n----- END U2F CHALLENGE -----",
-    "Welcome.*",
-    pexpect.EOF
-])
+def passthrough():
+    print()
+    sys.stdout.write(ssh.match.group())
+    try:
+        ssh.interact()
+    except UnboundLocalError:
+        # Work around bug in pexpect 3.1
+        pass
+    sys.exit(0)
+
+index = ssh.expect(["Authenticated with partial success.",
+                    "[^ \r\n]+",
+                    pexpect.EOF])
+
+if index == 0:
+    print(ssh.match.group())
+elif index == 1:
+    passthrough()
+elif index == 2:
+    sys.exit(0)
+
 while True:
-    index = ssh.expect_list(pattern_list)
+    index = ssh.expect(["Enter additional factors: ",
+                        "----- BEGIN U2F CHALLENGE -----\r\n",
+                        "[^ \r\n]+",
+                        pexpect.EOF])
+
     if index == 0:
         try:
             pin = getpass.getpass(ssh.match.group())
         except EOFError:
             pin = ""
         ssh.sendline(pin.strip())
+
     elif index == 1:
-        p = subprocess.Popen(["u2f-host", "-aauthenticate",
-                              "-o", ssh.match.group(1)],
+        u2f_origin = ssh.readline().strip()
+        u2f_challenge = ssh.readline().strip()
+        ssh.expect("----- END U2F CHALLENGE -----")
+        p = subprocess.Popen(["u2f-host", "-aauthenticate", "-o", u2f_origin],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        out, err = p.communicate(ssh.match.group(2))
+        out, err = p.communicate(u2f_challenge)
         p.wait()
         ssh.sendline(out.strip())
-    else:
-        break
-if index == 3:
-    sys.exit(0)
-sys.stdout.write(ssh.match.group())
-ssh.interact()
+
+    elif index == 2:
+        passthrough()
+
+    elif index == 3:
+        sys.exit(0)
