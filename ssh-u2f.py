@@ -48,9 +48,8 @@ while True:
             pin = ""
         ssh.sendline(pin.strip())
     elif index == 1:
-        p = subprocess.Popen(["/usr/local/bin/u2f-host", "-aauthenticate",
+        p = subprocess.Popen(["u2f-host", "-aauthenticate",
                               "-o", ssh.match.group(1)],
-                             env={"LD_LIBRARY_PATH": "/usr/local/lib"},
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         out, err = p.communicate(ssh.match.group(2))
         p.wait()
