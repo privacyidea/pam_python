@@ -46,7 +46,7 @@ while True:
             pin = getpass.getpass(ssh.match.group())
         except EOFError:
             pin = ""
-        ssh.sendline(pin)
+        ssh.sendline(pin.strip())
     elif index == 1:
         p = subprocess.Popen(["/usr/local/bin/u2f-host", "-aauthenticate",
                               "-o", ssh.match.group(1)],
