@@ -53,7 +53,6 @@ while True:
                              env={"LD_LIBRARY_PATH": "/usr/local/lib"},
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         out, err = p.communicate(ssh.match.group(2))
-        p.stdin.close()
         p.wait()
         ssh.sendline(out.strip())
     else:
