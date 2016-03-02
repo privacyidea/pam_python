@@ -24,7 +24,12 @@ def winch_handler(signum, frame):
 
 signal.signal(signal.SIGWINCH, winch_handler)
 
-ssh = pexpect.spawn("ssh", sys.argv[1:])
+try:
+    command = os.path.splitext(os.path.basename(__file__))[0].split("-")[0]
+except:
+    command = None
+
+ssh = pexpect.spawn(command or "ssh", sys.argv[1:])
 winch_handler(None, None)
 
 index = -1
