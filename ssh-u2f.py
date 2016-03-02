@@ -69,7 +69,9 @@ while True:
     elif index == 1:
         u2f_origin = ssh.readline().strip()
         u2f_challenge = ssh.readline().strip()
-        ssh.expect("----- END U2F CHALLENGE -----")
+        ssh.expect("(.*)----- END U2F CHALLENGE -----")
+        message = ssh.match.group(1).strip()
+        print(message or "Interact with your U2F token.")
         p = subprocess.Popen(["u2f-host", "-aauthenticate", "-o", u2f_origin],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         out, err = p.communicate(u2f_challenge)

@@ -147,7 +147,10 @@ class Authenticator(object):
 ----- BEGIN U2F CHALLENGE -----
 %s
 %s
------ END U2F CHALLENGE -----""" % (self.URL, json.dumps(attributes["u2fSignRequest"]))
+%s
+----- END U2F CHALLENGE -----""" % (self.URL,
+                                    json.dumps(attributes["u2fSignRequest"]),
+                                    str(detail.get("message", "")))
                     if transaction_id:
                         if challenge:
                             rval = self.challenge_response(transaction_id,
