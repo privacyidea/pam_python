@@ -7,6 +7,7 @@ import pexpect
 ssh = None
 
 def handler(signum, frame):
+    global ssh
     if ssh:
         ssh.kill(signum)
     sys.exit(signum)
@@ -16,6 +17,7 @@ signal.signal(signal.SIGTERM, handler)
 signal.signal(signal.SIGINT, handler)
 
 def winch_handler(signum, frame):
+    global ssh
     if ssh:
         rows, cols = os.popen('stty size', 'r').read().split()
         ssh.setwinsize(int(rows), int(cols))
