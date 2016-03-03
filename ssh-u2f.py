@@ -73,31 +73,24 @@ def passthrough():
         pass
     sys.exit(0)
 
-index = ssh.expect(["Authenticated with partial success.",
-                    "[^ \r\n]+",
-                    pexpect.EOF])
-
-if index == 0:
-    print(ssh.match.group())
-elif index == 1:
-    passthrough()
-elif index == 2:
-    sys.exit(0)
-
 while True:
-    index = ssh.expect(["Enter additional factors: ",
+    index = ssh.expect(["Authenticated with partial success.",
+                        "Enter additional factors: ",
                         "----- BEGIN U2F CHALLENGE -----\r\n",
                         "[^ \r\n]+",
                         pexpect.EOF])
 
     if index == 0:
+        print(ssh.match.group())
+
+    if index == 1:
         try:
             pin = getpass.getpass(ssh.match.group())
         except EOFError:
             pin = ""
         ssh.sendline(pin.strip())
 
-    elif index == 1:
+    elif index == 2:
         u2f_origin = ssh.readline().strip()
         u2f_challenge = ssh.readline().strip()
         ssh.expect("(.*)----- END U2F CHALLENGE -----")
@@ -109,8 +102,8 @@ while True:
         p.wait()
         ssh.sendline(out.strip())
 
-    elif index == 2:
+    elif index == 3:
         passthrough()
 
-    elif index == 3:
+    elif index == 4:
         sys.exit(0)
