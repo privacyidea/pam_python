@@ -1,8 +1,39 @@
 #!/usr/bin/env python
+#
+# -*- coding: utf-8 -*-
+#
+# 2016-03-03 Brandon Smith <freedom@reardencode.com>
+#            Initial Creation
+#
+# (c) Brandon Smith
+# Info: http://www.privacyidea.org
+#
+# This code is free software; you can redistribute it and/or
+# modify it under the terms of the GNU AFFERO GENERAL PUBLIC LICENSE
+# License as published by the Free Software Foundation; either
+# version 3 of the License, or any later version.
+#
+# This code is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU AFFERO GENERAL PUBLIC LICENSE for more details.
+#
+# You should have received a copy of the GNU Affero General Public
+# License along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
 from __future__ import print_function
 
 import getpass,os,re,signal,subprocess,sys
 import pexpect
+
+__doc__ = """This is an ssh (and ssh-like) wrapper that uses pexpect to
+interact with privacyIDEA's pam_python module for u2f challenge/response.
+
+Usage:
+    Make executable
+    Symlink ssh-u2f, scp-u2f, sftp-u2f, mosh-u2f, etc. into your PATH
+    Call just like ssh, eg. "ssh-u2f name@example.com"
+"""
 
 ssh = None
 

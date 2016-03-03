@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 #
+# 2016-03-03 Brandon Smith <freedom@reardencode.com>
+#            Add U2F challenge/response support
 # 2015-11-06 Cornelius Kölbel <cornelius.koelbel@netknights.it>
 #            Avoid SQL injections.
 # 2015-10-17 Cornelius Kölbel <cornelius.koelbel@netknights.it>
