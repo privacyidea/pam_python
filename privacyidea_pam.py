@@ -171,8 +171,12 @@ class Authenticator(object):
                                     json.dumps(attributes["u2fSignRequest"]),
                                     str(message or ""))
 
+        if bool(attributes.get("hideResponseInput", True)):
+            prompt_type = self.pamh.PAM_PROMPT_ECHO_OFF
+        else:
+            prompt_type = self.pamh.PAM_PROMPT_ECHO_ON
 
-        message = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_OFF, challenge)
+        message = self.pamh.Message(prompt_type, challenge)
         response = self.pamh.conversation(message)
         chal_response = json.loads(response.resp)
 
