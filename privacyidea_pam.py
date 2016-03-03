@@ -125,36 +125,13 @@ class Authenticator(object):
                                    auth_item)
                 else:
                     transaction_id = detail.get("transaction_id")
-                    challenge = None
 
-                    if "attributes" in detail:
-                        attributes = detail.get("attributes")
-                        if "u2fSignRequest" in attributes:
-                            syslog.syslog(syslog.LOG_DEBUG,
-                                    "Prompting for U2F authentication")
-# In case of U2F the $attributes looks like this:
-# {
-#     "img": "static/css/FIDO-U2F-Security-Key-444x444.png#012",
-#     "hideResponseInput" "1",
-#     "u2fSignRequest": {
-#         "challenge": "yji-PL1V0QELilDL3m6Lc-1yahpKZiU-z6ye5Zz2mp8",
-#         "version": "U2F_V2",
-#         "keyHandle": "fxDKTr6o8EEGWPyEyRVDvnoeA0c6v-dgvbN-6Mxc6XBmEItsw",
-#         "appId": "https://172.16.200.138"
-#     }
-# }
-                            challenge = """
------ BEGIN U2F CHALLENGE -----
-%s
-%s
-%s
------ END U2F CHALLENGE -----""" % (self.URL,
-                                    json.dumps(attributes["u2fSignRequest"]),
-                                    str(detail.get("message", "")))
                     if transaction_id:
-                        if challenge:
-                            rval = self.challenge_response(transaction_id,
-                                                           challenge)
+                        attributes = detail.get("attributes", {})
+                        if "u2fSignRequest" in attributes:
+                            rval = self.u2f_challenge_response(
+                                    transaction_id, detail.get("message"),
+                                    attributes)
                         else:
                             syslog.syslog(syslog.LOG_ERR,
                                           "%s: unsupported challenge" %
@@ -169,8 +146,31 @@ class Authenticator(object):
 
         return rval
 
-    def challenge_response(self, transaction_id, challenge):
+    def u2f_challenge_response(self, transaction_id, message, attributes):
         rval = self.pamh.PAM_SYSTEM_ERR
+
+        syslog.syslog(syslog.LOG_DEBUG, "Prompting for U2F authentication")
+
+# In case of U2F "attributes" looks like this:
+# {
+#     "img": "static/css/FIDO-U2F-Security-Key-444x444.png#012",
+#     "hideResponseInput" "1",
+#     "u2fSignRequest": {
+#         "challenge": "yji-PL1V0QELilDL3m6Lc-1yahpKZiU-z6ye5Zz2mp8",
+#         "version": "U2F_V2",
+#         "keyHandle": "fxDKTr6o8EEGWPyEyRVDvnoeA0c6v-dgvbN-6Mxc6XBmEItsw",
+#         "appId": "https://172.16.200.138"
+#     }
+# }
+        challenge = """
+----- BEGIN U2F CHALLENGE -----
+%s
+%s
+%s
+----- END U2F CHALLENGE -----""" % (self.URL,
+                                    json.dumps(attributes["u2fSignRequest"]),
+                                    str(message or ""))
+
 
         message = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_OFF, challenge)
         response = self.pamh.conversation(message)
