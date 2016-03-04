@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/privacyidea/pam_python.svg?branch=master)](https://travis-ci.org/privacyidea/pam_python)
+
 This module is to be used with http://pam-python.sourceforge.net/.
 It can be used to authenticate with OTP against privacyIDEA. It will also 
 cache future OTP values to enable offline authentication.
