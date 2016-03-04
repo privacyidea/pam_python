@@ -75,7 +75,7 @@ def passthrough():
 
 while True:
     index = ssh.expect(["Authenticated with partial success.",
-                        "Enter additional factors: ",
+                        "([Pp]assword[^:\r\n]*|Enter additional factors): ?",
                         "----- BEGIN U2F CHALLENGE -----\r\n",
                         "[^ \r\n]+",
                         pexpect.EOF])
