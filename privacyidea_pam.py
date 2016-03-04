@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 #
+# 2015-03-04 Cornelius Kölbel <cornelius.koelbel@netknights.it>
+#            Add normal challenge/response support
 # 2016-03-03 Brandon Smith <freedom@reardencode.com>
 #            Add U2F challenge/response support
 # 2015-11-06 Cornelius Kölbel <cornelius.koelbel@netknights.it>
@@ -89,7 +91,6 @@ class Authenticator(object):
 
         return json_response
 
-
     def authenticate(self, password):
         rval = self.pamh.PAM_SYSTEM_ERR
         # First we try to authenticate against the sqlitedb
@@ -129,22 +130,59 @@ class Authenticator(object):
                     transaction_id = detail.get("transaction_id")
 
                     if transaction_id:
-                        attributes = detail.get("attributes", {})
+                        attributes = detail.get("attributes") or {}
+                        message = detail.get("message").encode("utf-8")
                         if "u2fSignRequest" in attributes:
                             rval = self.u2f_challenge_response(
-                                    transaction_id, detail.get("message"),
+                                    transaction_id, message,
                                     attributes)
                         else:
-                            syslog.syslog(syslog.LOG_ERR,
-                                          "%s: unsupported challenge" %
-                                          __name__)
-
+                            rval = self.challenge_response(transaction_id,
+                                                           message,
+                                                           attributes)
                     else:
                         rval = self.pamh.PAM_AUTH_ERR
             else:
                 syslog.syslog(syslog.LOG_ERR,
                               "%s: %s" % (__name__,
                                           result.get("error").get("message")))
+
+        return rval
+
+    def challenge_response(self, transaction_id, message, attributes):
+        rval = self.pamh.PAM_SYSTEM_ERR
+
+        syslog.syslog(syslog.LOG_DEBUG, "Prompting for challenge response")
+        pam_message = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_ON, message)
+        response = self.pamh.conversation(pam_message)
+        otp = response.resp
+        r_code = response.resp_retcode
+        data = {"user": self.user,
+                "transaction_id": transaction_id,
+                "pass": otp}
+        if self.realm:
+            data["realm"] = self.realm
+
+        json_response = self.make_request(data)
+
+        result = json_response.get("result")
+        detail = json_response.get("detail")
+
+        if self.debug:
+            syslog.syslog(syslog.LOG_DEBUG,
+                          "%s: result: %s" % (__name__, result))
+            syslog.syslog(syslog.LOG_DEBUG,
+                          "%s: detail: %s" % (__name__, detail))
+
+        if result.get("status"):
+            if result.get("value"):
+                rval = self.pamh.PAM_SUCCESS
+            else:
+                rval = self.pamh.PAM_AUTH_ERR
+        else:
+            syslog.syslog(syslog.LOG_ERR,
+                          "%s: %s" % (__name__,
+                                      result.get("error").get("message")))
 
         return rval
 
@@ -213,8 +251,6 @@ class Authenticator(object):
 
         return rval
 
-
-
 def pam_sm_authenticate(pamh, flags, argv):
     config = _get_config(argv)
     debug = config.get("debug")
@@ -263,19 +299,23 @@ def pam_sm_authenticate(pamh, flags, argv):
 
 
 def pam_sm_setcred(pamh, flags, argv):
-  return pamh.PAM_SUCCESS
+    return pamh.PAM_SUCCESS
+
 
 def pam_sm_acct_mgmt(pamh, flags, argv):
-  return pamh.PAM_SUCCESS
+    return pamh.PAM_SUCCESS
+
 
 def pam_sm_open_session(pamh, flags, argv):
-  return pamh.PAM_SUCCESS
+    return pamh.PAM_SUCCESS
+
 
 def pam_sm_close_session(pamh, flags, argv):
-  return pamh.PAM_SUCCESS
+    return pamh.PAM_SUCCESS
+
 
 def pam_sm_chauthtok(pamh, flags, argv):
-  return pamh.PAM_SUCCESS
+    return pamh.PAM_SUCCESS
 
 
 def check_offline_otp(user, otp, sqlfile, window=10):
