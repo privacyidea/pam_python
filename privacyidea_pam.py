@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 #
+# 2016-03-03 Brandon Smith <freedom@reardencode.com>
+#            Add U2F challenge/response support
 # 2015-11-06 Cornelius Kölbel <cornelius.koelbel@netknights.it>
 #            Avoid SQL injections.
 # 2015-10-17 Cornelius Kölbel <cornelius.koelbel@netknights.it>
@@ -33,6 +35,7 @@ privacyIDEA authentication system.
 The code is tested in test_pam_module.py
 """
 
+import json
 import requests
 import syslog
 import sqlite3
@@ -75,6 +78,18 @@ class Authenticator(object):
         self.debug = config.get("debug")
         self.sqlfile = config.get("sqlfile", "/etc/privacyidea/pam.sqlite")
 
+    def make_request(self, data):
+        response = requests.post(self.URL + "/validate/check", data=data,
+                                 verify=self.sslverify)
+
+        json_response = response.json
+        if callable(json_response):
+            syslog.syslog(syslog.LOG_DEBUG, "requests > 1.0")
+            json_response = json_response()
+
+        return json_response
+
+
     def authenticate(self, password):
         rval = self.pamh.PAM_SYSTEM_ERR
         # First we try to authenticate against the sqlitedb
@@ -91,13 +106,8 @@ class Authenticator(object):
                     "pass": password}
             if self.realm:
                 data["realm"] = self.realm
-            response = requests.post(self.URL + "/validate/check", data=data,
-                                     verify=self.sslverify)
 
-            json_response = response.json
-            if callable(json_response):
-                syslog.syslog(syslog.LOG_DEBUG, "requests > 1.0")
-                json_response = json_response()
+            json_response = self.make_request(data)
 
             result = json_response.get("result")
             auth_item = json_response.get("auth_items")
@@ -105,8 +115,10 @@ class Authenticator(object):
             serial = detail.get("serial", "T%s" % time.time())
             tokentype = detail.get("type", "unknown")
             if self.debug:
-                syslog.syslog(syslog.LOG_DEBUG, "%s: result: %s" % (__name__,
-                                                                    result))
+                syslog.syslog(syslog.LOG_DEBUG,
+                              "%s: result: %s" % (__name__, result))
+                syslog.syslog(syslog.LOG_DEBUG,
+                              "%s: detail: %s" % (__name__, detail))
 
             if result.get("status"):
                 if result.get("value"):
@@ -114,13 +126,93 @@ class Authenticator(object):
                     save_auth_item(self.sqlfile, self.user, serial, tokentype,
                                    auth_item)
                 else:
-                    rval = self.pamh.PAM_AUTH_ERR
+                    transaction_id = detail.get("transaction_id")
+
+                    if transaction_id:
+                        attributes = detail.get("attributes", {})
+                        if "u2fSignRequest" in attributes:
+                            rval = self.u2f_challenge_response(
+                                    transaction_id, detail.get("message"),
+                                    attributes)
+                        else:
+                            syslog.syslog(syslog.LOG_ERR,
+                                          "%s: unsupported challenge" %
+                                          __name__)
+
+                    else:
+                        rval = self.pamh.PAM_AUTH_ERR
             else:
                 syslog.syslog(syslog.LOG_ERR,
                               "%s: %s" % (__name__,
                                           result.get("error").get("message")))
 
         return rval
+
+    def u2f_challenge_response(self, transaction_id, message, attributes):
+        rval = self.pamh.PAM_SYSTEM_ERR
+
+        syslog.syslog(syslog.LOG_DEBUG, "Prompting for U2F authentication")
+
+# In case of U2F "attributes" looks like this:
+# {
+#     "img": "static/css/FIDO-U2F-Security-Key-444x444.png#012",
+#     "hideResponseInput" "1",
+#     "u2fSignRequest": {
+#         "challenge": "yji-PL1V0QELilDL3m6Lc-1yahpKZiU-z6ye5Zz2mp8",
+#         "version": "U2F_V2",
+#         "keyHandle": "fxDKTr6o8EEGWPyEyRVDvnoeA0c6v-dgvbN-6Mxc6XBmEItsw",
+#         "appId": "https://172.16.200.138"
+#     }
+# }
+        challenge = """
+----- BEGIN U2F CHALLENGE -----
+%s
+%s
+%s
+----- END U2F CHALLENGE -----""" % (self.URL,
+                                    json.dumps(attributes["u2fSignRequest"]),
+                                    str(message or ""))
+
+        if bool(attributes.get("hideResponseInput", True)):
+            prompt_type = self.pamh.PAM_PROMPT_ECHO_OFF
+        else:
+            prompt_type = self.pamh.PAM_PROMPT_ECHO_ON
+
+        message = self.pamh.Message(prompt_type, challenge)
+        response = self.pamh.conversation(message)
+        chal_response = json.loads(response.resp)
+
+        data = {"user": self.user,
+                "transaction_id": transaction_id,
+                "pass": self.pamh.authtok,
+                "signaturedata": chal_response.get("signatureData"),
+                "clientdata": chal_response.get("clientData")}
+        if self.realm:
+            data["realm"] = self.realm
+
+        json_response = self.make_request(data)
+
+        result = json_response.get("result")
+        detail = json_response.get("detail")
+
+        if self.debug:
+            syslog.syslog(syslog.LOG_DEBUG,
+                          "%s: result: %s" % (__name__, result))
+            syslog.syslog(syslog.LOG_DEBUG,
+                          "%s: detail: %s" % (__name__, detail))
+
+        if result.get("status"):
+            if result.get("value"):
+                rval = self.pamh.PAM_SUCCESS
+            else:
+                rval = self.pamh.PAM_AUTH_ERR
+        else:
+            syslog.syslog(syslog.LOG_ERR,
+                          "%s: %s" % (__name__,
+                                      result.get("error").get("message")))
+
+        return rval
+
 
 
 def pam_sm_authenticate(pamh, flags, argv):
