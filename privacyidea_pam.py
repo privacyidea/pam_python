@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 #
+# 2016-08-31 Cornelius Kölbel <cornelius.koelgel@netknights.it>
+#            Add header user-agent to request
 # 2015-03-04 Cornelius Kölbel <cornelius.koelbel@netknights.it>
 #            Add normal challenge/response support
 # 2016-03-03 Brandon Smith <freedom@reardencode.com>
@@ -81,8 +83,10 @@ class Authenticator(object):
         self.sqlfile = config.get("sqlfile", "/etc/privacyidea/pam.sqlite")
 
     def make_request(self, data):
+        # add a user-agent to be displayed in the Client Application Type
+        headers = {'user-agent': 'PAM/2.15.0'}
         response = requests.post(self.URL + "/validate/check", data=data,
-                                 verify=self.sslverify)
+                                 headers=headers, verify=self.sslverify)
 
         json_response = response.json
         if callable(json_response):
