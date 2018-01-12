@@ -72,7 +72,7 @@ class Authenticator(object):
         self.pamh = pamh
         self.user = pamh.get_user(None)
         self.URL = config.get("url", "https://localhost")
-        self. sslverify = not config.get("nosslverify", False)
+        self.sslverify = not config.get("nosslverify", False)
         cacerts = config.get("cacerts")
         # If we do verify SSL certificates and if a CA Cert Bundle file is
         # provided, we set this.
