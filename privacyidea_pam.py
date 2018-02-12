@@ -82,10 +82,10 @@ class Authenticator(object):
         self.debug = config.get("debug")
         self.sqlfile = config.get("sqlfile", "/etc/privacyidea/pam.sqlite")
 
-    def make_request(self, data):
+    def make_request(self, data, endpoint="/validate/check"):
         # add a user-agent to be displayed in the Client Application Type
         headers = {'user-agent': 'PAM/2.15.0'}
-        response = requests.post(self.URL + "/validate/check", data=data,
+        response = requests.post(self.URL + endpoint, data=data,
                                  headers=headers, verify=self.sslverify)
 
         json_response = response.json
@@ -95,13 +95,61 @@ class Authenticator(object):
 
         return json_response
 
+    def offline_refill(self, serial, password):
+
+        # get refilltoken
+        conn = sqlite3.connect(self.sqlfile)
+        c = conn.cursor()
+        refilltoken = None
+        # get all possible serial/tokens for a user
+        for row in c.execute("SELECT config_name, config_value FROM config where config_name=?",
+                             ("refilltoken", )):
+            refilltoken = row[1]
+            syslog.syslog("Doing refill with token {0!s}".format(refilltoken))
+
+        if refilltoken:
+            data = {"serial": serial,
+                    "pass": password,
+                    "refilltoken": refilltoken}
+            json_response = self.make_request(data, "/validate/offlinerefill")
+
+            result = json_response.get("result")
+            auth_item = json_response.get("auth_items")
+            detail = json_response.get("detail") or {}
+            tokentype = detail.get("type", "unknown")
+            if self.debug:
+                syslog.syslog(syslog.LOG_DEBUG,
+                              "%s: result: %s" % (__name__, result))
+                syslog.syslog(syslog.LOG_DEBUG,
+                              "%s: detail: %s" % (__name__, detail))
+
+            if result.get("status"):
+                if result.get("value"):
+                    save_auth_item(self.sqlfile, self.user, serial, tokentype,
+                                   auth_item)
+            else:
+                syslog.syslog(syslog.LOG_ERR,
+                              "%s: %s" % (__name__,
+                                          result.get("error").get("message")))
+
     def authenticate(self, password):
         rval = self.pamh.PAM_SYSTEM_ERR
         # First we try to authenticate against the sqlitedb
-        if check_offline_otp(self.user, password, self.sqlfile, window=10):
+        r, serial = check_offline_otp(self.user, password, self.sqlfile, window=10)
+        syslog.syslog(syslog.LOG_DEBUG, "offline check returned: {0!s}, {1!s}".format(r, serial))
+        if r:
             syslog.syslog(syslog.LOG_DEBUG,
                           "%s: successfully authenticated against offline "
                           "database %s" % (__name__, self.sqlfile))
+
+            # Try to refill
+            try:
+                r = self.offline_refill(serial, password)
+                syslog.syslog(syslog.LOG_DEBUG, "offline refill returned {0!s}".format(r))
+            except Exception as e:
+                # If the network is not reachable we will not refill.
+                syslog.syslog(syslog.LOG_DEBUG, "failed to refill {0!s}".format(e))
+
             rval = self.pamh.PAM_SUCCESS
         else:
             if self.debug:
@@ -255,6 +303,7 @@ class Authenticator(object):
 
         return rval
 
+
 def pam_sm_authenticate(pamh, flags, argv):
     config = _get_config(argv)
     debug = config.get("debug")
@@ -322,7 +371,7 @@ def pam_sm_chauthtok(pamh, flags, argv):
     return pamh.PAM_SUCCESS
 
 
-def check_offline_otp(user, otp, sqlfile, window=10):
+def check_offline_otp(user, otp, sqlfile, window=10, refill=True):
     """
     compare the given otp values with the next hashes of the user.
 
@@ -332,7 +381,7 @@ def check_offline_otp(user, otp, sqlfile, window=10):
     :param user: The local user in the sql file
     :param otp: The otp value
     :param sqlfile: The sqlite file
-    :return: True or False
+    :return: Tuple of (True or False, serial)
     """
     res = False
     conn = sqlite3.connect(sqlfile)
@@ -340,6 +389,7 @@ def check_offline_otp(user, otp, sqlfile, window=10):
     _create_table(c)
     # get all possible serial/tokens for a user
     serials = []
+    matching_serial = None
     for row in c.execute("SELECT serial, user FROM authitems WHERE user=?"
                          "GROUP by serial", (user,)):
         serials.append(row[0])
@@ -362,7 +412,7 @@ def check_offline_otp(user, otp, sqlfile, window=10):
                   (matching_counter, matching_serial))
         conn.commit()
     conn.close()
-    return res
+    return res, matching_serial
 
 
 def save_auth_item(sqlfile, user, serial, tokentype, authitem):
@@ -400,6 +450,15 @@ def save_auth_item(sqlfile, user, serial, tokentype, authitem):
                       "tokenowner, otp) VALUES (?,?,?,?,?)",
                       (counter, user, serial, tokenowner, otphash))
 
+        refilltoken = offline.get("refilltoken")
+        # delete old refilltoken
+        try:
+            c.execute('DELETE FROM config where config_name="refilltoken"')
+        except:
+            pass
+        c.execute("INSERT INTO config (config_name, config_value) VALUES (?,?)",
+                  ("refilltoken", refilltoken))
+
     # Save (commit) the changes
     conn.commit()
 
@@ -417,6 +476,12 @@ def _create_table(c):
         c.execute("CREATE TABLE authitems "
                   "(counter int, user text, serial text, tokenowner text,"
                   "otp text, tokentype text)")
+    except:
+        pass
+
+    try:
+        # create config table
+        c.execute("CREATE TABLE config (config_name text, config_value text)")
     except:
         pass
 
