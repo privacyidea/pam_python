@@ -127,10 +127,12 @@ class Authenticator(object):
                 if result.get("value"):
                     save_auth_item(self.sqlfile, self.user, serial, tokentype,
                                    auth_item)
+                    return True
             else:
                 syslog.syslog(syslog.LOG_ERR,
                               "%s: %s" % (__name__,
                                           result.get("error").get("message")))
+        return False
 
     def authenticate(self, password):
         rval = self.pamh.PAM_SYSTEM_ERR
@@ -454,7 +456,7 @@ def save_auth_item(sqlfile, user, serial, tokentype, authitem):
         # delete old refilltoken
         try:
             c.execute('DELETE FROM refilltokens WHERE serial=?', (serial,))
-        except:
+        except sqlite3.OperationalError:
             pass
         c.execute("INSERT INTO refilltokens (serial, refilltoken) VALUES (?,?)",
                   (serial, refilltoken))
@@ -476,12 +478,12 @@ def _create_table(c):
         c.execute("CREATE TABLE authitems "
                   "(counter int, user text, serial text, tokenowner text,"
                   "otp text, tokentype text)")
-    except:
+    except sqlite3.OperationalError:
         pass
 
     try:
         # create refilltokens table
         c.execute("CREATE TABLE refilltokens (serial text, refilltoken text)")
-    except:
+    except sqlite3.OperationalError:
         pass
 
