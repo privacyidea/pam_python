@@ -102,9 +102,9 @@ class Authenticator(object):
         c = conn.cursor()
         refilltoken = None
         # get all possible serial/tokens for a user
-        for row in c.execute("SELECT config_name, config_value FROM config where config_name=?",
-                             ("refilltoken", )):
-            refilltoken = row[1]
+        for row in c.execute("SELECT refilltoken FROM refilltokens WHERE serial=?",
+                             (serial, )):
+            refilltoken = row[0]
             syslog.syslog("Doing refill with token {0!s}".format(refilltoken))
 
         if refilltoken:
@@ -453,11 +453,11 @@ def save_auth_item(sqlfile, user, serial, tokentype, authitem):
         refilltoken = offline.get("refilltoken")
         # delete old refilltoken
         try:
-            c.execute('DELETE FROM config where config_name="refilltoken"')
+            c.execute('DELETE FROM refilltokens WHERE serial=?', (serial,))
         except:
             pass
-        c.execute("INSERT INTO config (config_name, config_value) VALUES (?,?)",
-                  ("refilltoken", refilltoken))
+        c.execute("INSERT INTO refilltokens (serial, refilltoken) VALUES (?,?)",
+                  (serial, refilltoken))
 
     # Save (commit) the changes
     conn.commit()
@@ -480,8 +480,8 @@ def _create_table(c):
         pass
 
     try:
-        # create config table
-        c.execute("CREATE TABLE config (config_name text, config_value text)")
+        # create refilltokens table
+        c.execute("CREATE TABLE refilltokens (serial text, refilltoken text)")
     except:
         pass
 
