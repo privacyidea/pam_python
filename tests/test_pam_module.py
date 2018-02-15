@@ -10,6 +10,8 @@ from privacyidea_pam import (pam_sm_authenticate,
                              save_auth_item,
                              check_offline_otp)
 
+REFILL_1 = "a" * 80
+REFILL_2 = "b" * 80
 
 SQLFILE = "pam-test.sqlite"
 # test100000
@@ -22,6 +24,16 @@ RESP = {1: '$pbkdf2-sha512$19000$Scl5TwmhtPae856zFgJgLA$ZQAqtqmGTf6IY0t9jg2MCg'
         3: '$pbkdf2-sha512$19000$JATgHGNsDSEEIGRMqXXOmQ$Ub67KeNbwObsFk7mwTetNf'
            'lwTOEKXMzJ5BTblZsu3bV4KAP1rEW6nUPfqLf6/f2yoNhpX1mCS3dt77EBKtJM.A'
 }
+
+# test100003
+# test100004
+REFILL_RESP = {
+    4: '$pbkdf2-sha512$25000$SSlF6L2XUurdG.N8LyVkTA$hDscUl2n5H84YjlE0Z8I94Y'
+       'R0NiCcCrI2weuFPR7XID6mxSzbZOTwMAeYCMPKPritj/VwZAenosNWGhByi16Ng',
+    5: '$pbkdf2-sha512$25000$NWYMAeDcuzfGOGds7Z1zLg$wOYEQApbmRMVjmEv1hLqi.n'
+       '4ZeSG0AsSIEIR7TqVuwL64XM0yePEqOn/ur7mOWzuo5ak.vZgwQeHwYM71Cjlfw',
+}
+
 
 # TEST100000
 # TEST100001
@@ -47,8 +59,22 @@ SUCCESS_BODY = {"detail": {"message": "matching 1 tokens",
                 "result": {"status": True,
                            "value": True
                 },
-                "auth_items": {"offline": [{"username": "corny",
+                "auth_items": {"offline": [{"refilltoken": REFILL_1,
+                                            "username": "corny",
                                             "response": RESP}
+                ]
+                },
+                "version": "privacyIDEA unknown"
+}
+
+REFILL_BODY = { "id": 1,
+                "jsonrpc": "2.0",
+                "result": {"status": True,
+                           "value": True
+                },
+                "auth_items": {"offline": [{"refilltoken": REFILL_2,
+                                            "username": "corny",
+                                            "response": REFILL_RESP}
                 ]
                 },
                 "version": "privacyIDEA unknown"
@@ -95,8 +121,9 @@ class PAMTestCase(unittest.TestCase):
 
     def test_01_check_offline_otp(self):
         # Check with no entries in the database
-        r = check_offline_otp("cornelius", "test123456", SQLFILE)
+        r, matching_serial = check_offline_otp("cornelius", "test123456", SQLFILE)
         self.assertFalse(r)
+        self.assertIsNone(matching_serial)
 
         # Save some values to the database
         r = save_auth_item(SQLFILE,
@@ -107,11 +134,13 @@ class PAMTestCase(unittest.TestCase):
                                          "response": RESP}
                            ]
                            })
-        r = check_offline_otp("cornelius", "test100000", SQLFILE)
+        r, matching_serial = check_offline_otp("cornelius", "test100000", SQLFILE)
         self.assertTrue(r)
+        self.assertEqual(matching_serial, "TOK001")
         # Authenticating with the same value a second time, fails
-        r = check_offline_otp("cornelius", "test100000", SQLFILE)
+        r, matching_serial = check_offline_otp("cornelius", "test100000", SQLFILE)
         self.assertFalse(r)
+        self.assertIsNone(matching_serial)
 
     @responses.activate
     def test_02_authenticate_offline(self):
@@ -209,3 +238,71 @@ class PAMTestCase(unittest.TestCase):
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
         self.assertEqual(r, PAMH.PAM_SUCCESS)
+
+    def test_06_refill(self):
+        with responses.RequestsMock() as rsps:
+            # Get offline OTPs + refill token
+            rsps.add(responses.POST,
+                          "http://my.privacyidea.server/validate/check",
+                          body=json.dumps(SUCCESS_BODY),
+                          content_type="application/json")
+
+            pamh = PAMH("cornelius", "test100000")
+            flags = None
+            argv = ["url=http://my.privacyidea.server",
+                    "sqlfile=%s" % SQLFILE,
+                    "try_first_pass"]
+            r = pam_sm_authenticate(pamh, flags, argv)
+            self.assertEqual(r, PAMH.PAM_SUCCESS)
+
+        # OTP value not known yet, online auth does not work
+        pamh = PAMH("cornelius", "test100004")
+        flags = None
+        argv = ["url=http://my.privacyidea.server",
+                "sqlfile=%s" % SQLFILE,
+                "try_first_pass"]
+        r = pam_sm_authenticate(pamh, flags, argv)
+        self.assertNotEqual(r, PAMH.PAM_SUCCESS)
+
+        # now with refill
+        with responses.RequestsMock() as rsps:
+            rsps.add(responses.POST,
+                          "http://my.privacyidea.server/validate/offlinerefill",
+                          body=json.dumps(REFILL_BODY),
+                          content_type="application/json")
+
+            pamh = PAMH("cornelius", "test100001")
+            flags = None
+            argv = ["url=http://my.privacyidea.server",
+                    "sqlfile=%s" % SQLFILE,
+                    "try_first_pass"]
+            r = pam_sm_authenticate(pamh, flags, argv)
+            self.assertEqual(r, PAMH.PAM_SUCCESS)
+
+            self.assertIn('refilltoken=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                          rsps.calls[0].request.body)
+
+        # authenticate with refilled
+        with responses.RequestsMock() as rsps:
+            pamh = PAMH("cornelius", "test100004")
+            flags = None
+            argv = ["url=http://my.privacyidea.server",
+                    "sqlfile=%s" % SQLFILE,
+                    "try_first_pass"]
+            r = pam_sm_authenticate(pamh, flags, argv)
+            self.assertEqual(r, PAMH.PAM_SUCCESS)
+
+            # using new refill token
+            self.assertIn('refilltoken=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                          rsps.calls[0].request.body)
+
+        # ... but not twice
+        pamh = PAMH("cornelius", "test100004")
+        flags = None
+        argv = ["url=http://my.privacyidea.server",
+                "sqlfile=%s" % SQLFILE,
+                "try_first_pass"]
+        r = pam_sm_authenticate(pamh, flags, argv)
+        self.assertNotEqual(r, PAMH.PAM_SUCCESS)
+
+

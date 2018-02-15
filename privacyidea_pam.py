@@ -102,9 +102,9 @@ class Authenticator(object):
         c = conn.cursor()
         refilltoken = None
         # get all possible serial/tokens for a user
-        for row in c.execute("SELECT config_name, config_value FROM config where config_name=?",
-                             ("refilltoken", )):
-            refilltoken = row[1]
+        for row in c.execute("SELECT refilltoken FROM refilltokens WHERE serial=?",
+                             (serial, )):
+            refilltoken = row[0]
             syslog.syslog("Doing refill with token {0!s}".format(refilltoken))
 
         if refilltoken:
@@ -127,10 +127,12 @@ class Authenticator(object):
                 if result.get("value"):
                     save_auth_item(self.sqlfile, self.user, serial, tokentype,
                                    auth_item)
+                    return True
             else:
                 syslog.syslog(syslog.LOG_ERR,
                               "%s: %s" % (__name__,
                                           result.get("error").get("message")))
+        return False
 
     def authenticate(self, password):
         rval = self.pamh.PAM_SYSTEM_ERR
@@ -453,11 +455,11 @@ def save_auth_item(sqlfile, user, serial, tokentype, authitem):
         refilltoken = offline.get("refilltoken")
         # delete old refilltoken
         try:
-            c.execute('DELETE FROM config where config_name="refilltoken"')
-        except:
+            c.execute('DELETE FROM refilltokens WHERE serial=?', (serial,))
+        except sqlite3.OperationalError:
             pass
-        c.execute("INSERT INTO config (config_name, config_value) VALUES (?,?)",
-                  ("refilltoken", refilltoken))
+        c.execute("INSERT INTO refilltokens (serial, refilltoken) VALUES (?,?)",
+                  (serial, refilltoken))
 
     # Save (commit) the changes
     conn.commit()
@@ -476,12 +478,12 @@ def _create_table(c):
         c.execute("CREATE TABLE authitems "
                   "(counter int, user text, serial text, tokenowner text,"
                   "otp text, tokentype text)")
-    except:
+    except sqlite3.OperationalError:
         pass
 
     try:
-        # create config table
-        c.execute("CREATE TABLE config (config_name text, config_value text)")
-    except:
+        # create refilltokens table
+        c.execute("CREATE TABLE refilltokens (serial text, refilltoken text)")
+    except sqlite3.OperationalError:
         pass
 
