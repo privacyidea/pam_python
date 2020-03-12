@@ -35,3 +35,8 @@ It can take the following parameters:
    This is the SQLite file that is used to store the offline authentication 
    information.
    The default file is /etc/privacyidea/pam.sqlite
+
+**no_authtok**
+
+  Do not set pam authtok to user input from OTP prompt.
+  Useful if you want pam_unix to ask for user password after OTP authentication.
