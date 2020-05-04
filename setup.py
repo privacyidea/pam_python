@@ -1,18 +1,14 @@
 # -*- coding: utf-8 -*-
-from setuptools import setup, find_packages
-import os
-import glob
-import sys
+
+from setuptools import setup
 
 #VERSION="2.1dev4"
-VERSION="2.11dev0"
+VERSION = "2.11dev0"
 
-install_requires = []
-# For python 2.6 we need additional dependency importlib
-try:
-    import importlib
-except ImportError:
-    install_requires.append('importlib')
+install_requires = [
+    'requests>=2.23',
+    'passlib>=1.7.2'
+]
 
 setup(
     name='privacyidea_pam',
@@ -34,8 +30,5 @@ setup(
                  "Topic :: System ::"
                  " Systems Administration :: Authentication/Directory"
                  ],
-    #message_extractors={'privacyidea': [
-    #        ('**.py', 'python', None),
-    #        ('static/**.html', 'html', {'input_encoding': 'utf-8'})]},
     zip_safe=False
 )
