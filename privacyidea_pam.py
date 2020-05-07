@@ -446,7 +446,7 @@ def save_auth_item(sqlfile, user, serial, tokentype, authitem):
     if authitem:
         offline = authitem.get("offline", [{}])[0]
         tokenowner = offline.get("username")
-        for counter, otphash in offline.get("response").iteritems():
+        for counter, otphash in offline.get("response").items():
             # Insert the OTP hash
             c.execute("INSERT INTO authitems (counter, user, serial,"
                       "tokenowner, otp) VALUES (?,?,?,?,?)",
