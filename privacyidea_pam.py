@@ -180,7 +180,6 @@ class Authenticator(object):
                     rval = self.pamh.PAM_SUCCESS
                     save_auth_item(self.sqlfile, self.user, serial, tokentype,
                                    auth_item)
-                    save_history_item(self.sqlfile, self.user, serial, True)
                 else:
                     transaction_id = detail.get("transaction_id")
                     message = detail.get("message").encode("utf-8")
@@ -198,14 +197,14 @@ class Authenticator(object):
                     else:
                         syslog.syslog(syslog.LOG_ERR,
                                       "%s: %s" % (__name__, message))
-                        save_history_item(self.sqlfile, self.user, serial, False)
                         rval = self.pamh.PAM_AUTH_ERR
             else:
                 syslog.syslog(syslog.LOG_ERR,
                               "%s: %s" % (__name__,
                                           result.get("error").get("message")))
-                save_history_item(self.sqlfile, self.user, serial, False)
 
+        # Save history
+        save_history_item(self.sqlfile, self.user, serial, (True if rval == self.pamh.PAM_SUCCESS else False))
         return rval
 
     def challenge_response(self, transaction_id, message, attributes):
