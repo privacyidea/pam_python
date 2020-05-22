@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 #
+# 2020-03-12 Julian Golderer <julian.golderer@fhv.at>
+#            Add parameter "no_authtok": do not set pam authtok
 # 2016-08-31 Cornelius Kölbel <cornelius.koelgel@netknights.it>
 #            Add header user-agent to request
 # 2015-03-04 Cornelius Kölbel <cornelius.koelbel@netknights.it>
@@ -311,6 +313,7 @@ def pam_sm_authenticate(pamh, flags, argv):
     debug = config.get("debug")
     try_first_pass = config.get("try_first_pass")
     prompt = config.get("prompt", "Your OTP")
+    no_authtok = config.get("no_authtok")
     if prompt[-1] != ":":
         prompt += ":"
     rval = pamh.PAM_AUTH_ERR
@@ -321,12 +324,13 @@ def pam_sm_authenticate(pamh, flags, argv):
         if pamh.authtok is None or not try_first_pass:
             message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
             response = pamh.conversation(message)
-            pamh.authtok = response.resp
+            if not no_authtok:
+                pamh.authtok = response.resp
 
         if debug and try_first_pass:
             syslog.syslog(syslog.LOG_DEBUG, "%s: running try_first_pass" %
                           __name__)
-        rval = Auth.authenticate(pamh.authtok)
+        rval = Auth.authenticate(response.resp)
 
         # If the first authentication did not succeed but we have
         # try_first_pass, we ask again for a password:
@@ -334,9 +338,10 @@ def pam_sm_authenticate(pamh, flags, argv):
             # Now we give it a second try:
             message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
             response = pamh.conversation(message)
-            pamh.authtok = response.resp
+            if not no_authtok:
+                pamh.authtok = response.resp
 
-            rval = Auth.authenticate(pamh.authtok)
+            rval = Auth.authenticate(response.resp)
 
     except Exception as exx:
         syslog.syslog(syslog.LOG_ERR, traceback.format_exc())
