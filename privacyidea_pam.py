@@ -46,6 +46,7 @@ import sqlite3
 import passlib.hash
 import time
 import traceback
+import datetime
 
 
 def _get_config(argv):
@@ -163,7 +164,6 @@ class Authenticator(object):
                 data["realm"] = self.realm
 
             json_response = self.make_request(data)
-
             result = json_response.get("result")
             auth_item = json_response.get("auth_items")
             detail = json_response.get("detail") or {}
@@ -182,10 +182,10 @@ class Authenticator(object):
                                    auth_item)
                 else:
                     transaction_id = detail.get("transaction_id")
+                    message = detail.get("message").encode("utf-8")
 
                     if transaction_id:
                         attributes = detail.get("attributes") or {}
-                        message = detail.get("message").encode("utf-8")
                         if "u2fSignRequest" in attributes:
                             rval = self.u2f_challenge_response(
                                     transaction_id, message,
@@ -195,12 +195,16 @@ class Authenticator(object):
                                                            message,
                                                            attributes)
                     else:
+                        syslog.syslog(syslog.LOG_ERR,
+                                      "%s: %s" % (__name__, message))
                         rval = self.pamh.PAM_AUTH_ERR
             else:
                 syslog.syslog(syslog.LOG_ERR,
                               "%s: %s" % (__name__,
                                           result.get("error").get("message")))
 
+        # Save history
+        save_history_item(self.sqlfile, self.user, serial, (True if rval == self.pamh.PAM_SUCCESS else False))
         return rval
 
     def challenge_response(self, transaction_id, message, attributes):
@@ -311,6 +315,7 @@ def pam_sm_authenticate(pamh, flags, argv):
     debug = config.get("debug")
     try_first_pass = config.get("try_first_pass")
     prompt = config.get("prompt", "Your OTP")
+    grace_time = config.get("grace")
     if prompt[-1] != ":":
         prompt += ":"
     rval = pamh.PAM_AUTH_ERR
@@ -318,25 +323,33 @@ def pam_sm_authenticate(pamh, flags, argv):
 
     Auth = Authenticator(pamh, config)
     try:
-        if pamh.authtok is None or not try_first_pass:
-            message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
-            response = pamh.conversation(message)
-            pamh.authtok = response.resp
 
-        if debug and try_first_pass:
-            syslog.syslog(syslog.LOG_DEBUG, "%s: running try_first_pass" %
-                          __name__)
-        rval = Auth.authenticate(pamh.authtok)
+        if grace_time is not None:
+            syslog.syslog(syslog.LOG_DEBUG, "Grace period in minutes: %s " % (str(grace_time)))
+            # First we try to check if grace is authorized
+            if check_last_history(Auth.sqlfile, Auth.user, grace_time, window=10):
+                rval = pamh.PAM_SUCCESS
 
-        # If the first authentication did not succeed but we have
-        # try_first_pass, we ask again for a password:
-        if rval != pamh.PAM_SUCCESS and try_first_pass:
-            # Now we give it a second try:
-            message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
-            response = pamh.conversation(message)
-            pamh.authtok = response.resp
+        if rval != pamh.PAM_SUCCESS:
+            if pamh.authtok is None or not try_first_pass:
+                message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
+                response = pamh.conversation(message)
+                pamh.authtok = response.resp
 
+            if debug and try_first_pass:
+                syslog.syslog(syslog.LOG_DEBUG, "%s: running try_first_pass" %
+                              __name__)
             rval = Auth.authenticate(pamh.authtok)
+
+            # If the first authentication did not succeed but we have
+            # try_first_pass, we ask again for a password:
+            if rval != pamh.PAM_SUCCESS and try_first_pass:
+                # Now we give it a second try:
+                message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
+                response = pamh.conversation(message)
+                pamh.authtok = response.resp
+
+                rval = Auth.authenticate(pamh.authtok)
 
     except Exception as exx:
         syslog.syslog(syslog.LOG_ERR, traceback.format_exc())
@@ -468,6 +481,109 @@ def save_auth_item(sqlfile, user, serial, tokentype, authitem):
     # Just be sure any changes have been committed or they will be lost.
     conn.close()
 
+def check_last_history(sqlfile, user, grace_time, window=10):
+    """
+    Get the last event for this user.
+
+    If success reset the error counter.
+    If error increment the error counter.
+
+    :param sqlfile: An SQLite file. If it does not exist, it will be generated.
+    :type sqlfile: basestring
+    :param user: The PAM user
+    :param serial: The serial number of the token
+    :param success: Boolean
+
+    :return:
+    """
+    conn = sqlite3.connect(sqlfile, detect_types=sqlite3.PARSE_DECLTYPES)
+    c = conn.cursor()
+    # Create the table if necessary
+    _create_table(c)
+
+    res = False
+    events = []
+
+    for row in c.execute("SELECT user, serial, last_success, last_error FROM history "
+                         "WHERE user=? ORDER by last_success "
+                         "LIMIT ?",
+                         (user, window)):
+        events.append(row)
+
+    if len(events)>0:
+        for event in events:
+            last_success = event[2]
+            if last_success is not None:
+                # Get the elapsed time in minutes since last success
+                last_success_delta = datetime.datetime.now() - last_success
+                delta = last_success_delta.seconds / 60
+                if delta < int(grace_time):
+                    syslog.syslog(syslog.LOG_DEBUG, "%s: Last success : %s , was %s minutes ago "
+                            "and in the grace period" % (
+                            __name__, str(last_success), str(delta)))
+                    res = True
+                    break
+
+            else:
+                syslog.syslog(syslog.LOG_DEBUG, "%s: No last success recorded: %s" % (
+                    __name__, user))
+    else:
+        syslog.syslog(syslog.LOG_DEBUG, "%s: No history for: %s" % (
+            __name__, user))
+
+
+    conn.close()
+    return res
+
+
+def save_history_item(sqlfile, user, serial, success):
+    """
+    Save the given success/error event.
+
+    If success reset the error counter.
+    If error increment the error counter.
+
+    :param sqlfile: An SQLite file. If it does not exist, it will be generated.
+    :type sqlfile: basestring
+    :param user: The PAM user
+    :param serial: The serial number of the token
+    :param success: Boolean
+
+    :return:
+    """
+    conn = sqlite3.connect(sqlfile, detect_types=sqlite3.PARSE_DECLTYPES)
+    c = conn.cursor()
+    # Create the table if necessary
+    _create_table(c)
+
+    syslog.syslog(syslog.LOG_DEBUG, "%s: offline save event: %s" % (
+        __name__, ("success" if success else "error")))
+    if success:
+        # Insert the Event
+        c.execute("INSERT OR REPLACE INTO history (user, serial,"
+                  "error_counter, last_success) VALUES (?,?,?,?)",
+                  (user, serial, 0, datetime.datetime.now()))
+    else:
+        # Insert the Event
+        c.execute("UPDATE history SET error_counter = error_counter + 1, "
+                    " serial = ? , last_error = ? "
+                    " WHERE user = ? ",
+                  (serial, datetime.datetime.now(), user))
+
+        syslog.syslog(syslog.LOG_DEBUG,"Rows affected : %d " % c.rowcount)
+        if c.rowcount == 0:
+            c.execute("INSERT INTO history (user, serial,"
+                      "error_counter, last_error) VALUES (?,?,?,?)",
+                      (user, serial, 1, datetime.datetime.now()))
+
+
+    # Save (commit) the changes
+    conn.commit()
+
+    # We can also close the connection if we are done with it.
+    # Just be sure any changes have been committed or they will be lost.
+    conn.close()
+
 
 def _create_table(c):
     """
@@ -475,7 +591,7 @@ def _create_table(c):
     :param c: The connection cursor
     """
     try:
-        c.execute("CREATE TABLE authitems "
+        c.execute("CREATE TABLE IF NOT EXISTS authitems "
                   "(counter int, user text, serial text, tokenowner text,"
                   "otp text, tokentype text)")
     except sqlite3.OperationalError:
@@ -483,7 +599,16 @@ def _create_table(c):
 
     try:
         # create refilltokens table
-        c.execute("CREATE TABLE refilltokens (serial text, refilltoken text)")
+        c.execute("CREATE TABLE IF NOT EXISTS refilltokens (serial text, refilltoken text)")
     except sqlite3.OperationalError:
         pass
 
+    try:
+        # create history table
+        c.execute("CREATE TABLE IF NOT EXISTS history "
+                  "(user text, serial text, error_counter int, "
+                  "last_success timestamp, last_error timestamp)")
+        c.execute("CREATE UNIQUE INDEX idx_user "
+                    "ON history (user);")
+    except sqlite3.OperationalError:
+        pass

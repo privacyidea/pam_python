@@ -2,4 +2,7 @@
 .idea/
 .tox/
 venv*/
+build/
+dist/
+privacyidea_pam.egg-info/
 .coverage
