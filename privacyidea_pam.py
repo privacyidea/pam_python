@@ -83,9 +83,12 @@ class Authenticator(object):
         self.debug = config.get("debug")
         self.sqlfile = config.get("sqlfile", "/etc/privacyidea/pam.sqlite")
 
-    def make_request(self, data, endpoint="/validate/check"):
+    def make_request(self, data, endpoint="/validate/check", token=None):
         # add a user-agent to be displayed in the Client Application Type
         headers = {'user-agent': 'PAM/2.15.0'}
+        if token:
+            headers["Authorization"] = token
+
         response = requests.post(self.URL + endpoint, data=data,
                                  headers=headers, verify=self.sslverify)
 
@@ -95,6 +98,47 @@ class Authenticator(object):
             json_response = json_response()
 
         return json_response
+
+    def enroll_user(self, user, password):
+        syslog.syslog(syslog.LOG_ERR,
+                      "%s: %s" % (__name__, "Generating a new token"))
+
+
+
+        data = {"username": "admin",
+                "password": "ZZZZZZ"}
+
+        auth_response = self.make_request(data, "/auth")
+        result = auth_response.get("result")
+
+        if result.get("status"):
+            token = result.get("value").get("token")
+            data = {"user": self.user,
+                    "genkey": "1",
+                    "pin": "1234",
+                    "type": "email",
+                    "dynamic_email":1}
+
+            if self.realm:
+                data["realm"] = self.realm
+            json_response = self.make_request(data, endpoint="/token/init", token=token)
+
+            result = json_response.get("result")
+            detail = json_response.get("detail")
+
+            if self.debug:
+                syslog.syslog(syslog.LOG_DEBUG,
+                              "%s: result: %s" % (__name__, result))
+                syslog.syslog(syslog.LOG_DEBUG,
+                              "%s: detail: %s" % (__name__, detail))
+
+        else:
+            error_msg = result.get("error").get("message")
+            syslog.syslog(syslog.LOG_ERR,
+                          "%s: %s" % (__name__, error_msg))
+            pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, error_msg)
+            self.pamh.conversation(pam_message)
+        return
 
     def offline_refill(self, serial, password):
 
@@ -195,13 +239,21 @@ class Authenticator(object):
                                                            message,
                                                            attributes)
                     else:
-                        syslog.syslog(syslog.LOG_ERR,
-                                      "%s: %s" % (__name__, message))
-                        rval = self.pamh.PAM_AUTH_ERR
+                        if message == 'The user has no tokens assigned':
+                            self.enroll_user(user, password)
+
+                        else:
+                            syslog.syslog(syslog.LOG_ERR,
+                                          "%s: %s" % (__name__, message))
+                            pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, message)
+                            self.pamh.conversation(pam_message)
+                            rval = self.pamh.PAM_AUTH_ERR
             else:
+                error_msg = result.get("error").get("message")
                 syslog.syslog(syslog.LOG_ERR,
-                              "%s: %s" % (__name__,
-                                          result.get("error").get("message")))
+                              "%s: %s" % (__name__, error_msg))
+                pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, error_msg)
+                self.pamh.conversation(pam_message)
 
         # Save history
         save_history_item(self.sqlfile, self.user, serial, (True if rval == self.pamh.PAM_SUCCESS else False))
@@ -516,7 +568,7 @@ def check_last_history(sqlfile, user, grace_time, window=10):
             if last_success is not None:
                 # Get the elapsed time in minutes since last success
                 last_success_delta = datetime.datetime.now() - last_success
-                delta = last_success_delta.seconds / 60
+                delta = last_success_delta.seconds / 60 + last_success_delta.days * 1440
                 if delta < int(grace_time):
                     syslog.syslog(syslog.LOG_DEBUG, "%s: Last success : %s , was %s minutes ago "
                             "and in the grace period" % (
