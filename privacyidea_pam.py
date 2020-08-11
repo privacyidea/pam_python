@@ -82,6 +82,7 @@ class Authenticator(object):
             self.sslverify = cacerts
         self.realm = config.get("realm")
         self.debug = config.get("debug")
+        self.api_token = config.get("api_token")
         self.sqlfile = config.get("sqlfile", "/etc/privacyidea/pam.sqlite")
 
     def make_request(self, data, endpoint="/validate/check", token=None):
@@ -100,46 +101,40 @@ class Authenticator(object):
 
         return json_response
 
-    def enroll_user(self, user, password):
-        syslog.syslog(syslog.LOG_ERR,
+    def enroll_user(self, user, pin):
+        # Generate a new email Token with the provided pin
+        syslog.syslog(syslog.LOG_DEBUG,
                       "%s: %s" % (__name__, "Generating a new token"))
 
+        data = {"user": self.user,
+                "genkey": "1",
+                "pin": "1234",
+                "type": "email",
+                "dynamic_email": 1}
 
+        if self.realm:
+            data["realm"] = self.realm
+        json_response = self.make_request(data, endpoint="/token/init", token=self.api_token)
 
-        data = {"username": "admin",
-                "password": "ZZZZZZ"}
+        result = json_response.get("result")
+        detail = json_response.get("detail")
 
-        auth_response = self.make_request(data, "/auth")
-        result = auth_response.get("result")
-
+        if self.debug:
+            syslog.syslog(syslog.LOG_DEBUG,
+                          "%s: result: %s" % (__name__, result))
+            syslog.syslog(syslog.LOG_DEBUG,
+                          "%s: detail: %s" % (__name__, detail))
         if result.get("status"):
-            token = result.get("value").get("token")
-            data = {"user": self.user,
-                    "genkey": "1",
-                    "pin": "1234",
-                    "type": "email",
-                    "dynamic_email":1}
-
-            if self.realm:
-                data["realm"] = self.realm
-            json_response = self.make_request(data, endpoint="/token/init", token=token)
-
-            result = json_response.get("result")
-            detail = json_response.get("detail")
-
-            if self.debug:
-                syslog.syslog(syslog.LOG_DEBUG,
-                              "%s: result: %s" % (__name__, result))
-                syslog.syslog(syslog.LOG_DEBUG,
-                              "%s: detail: %s" % (__name__, detail))
-
+            if result.get("value"):
+                message = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_OFF, "Please re-enter your PIN: ")
+                response = self.pamh.conversation(message)
+                self.pamh.authtok = response.resp
+                return self.authenticate(self.pamh.authtok)
         else:
-            error_msg = result.get("error").get("message")
             syslog.syslog(syslog.LOG_ERR,
-                          "%s: %s" % (__name__, error_msg))
-            pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, error_msg)
-            self.pamh.conversation(pam_message)
-        return
+                  "%s: %s" % (__name__,
+                              result.get("error").get("message")))
+            return self.pamh.PAM_AUTH_ERR
 
     def offline_refill(self, serial, password):
 
@@ -241,7 +236,14 @@ class Authenticator(object):
                                                            attributes)
                     else:
                         if message == 'The user has no tokens assigned':
-                            self.enroll_user(user, password)
+                            syslog.syslog(syslog.LOG_DEBUG,
+                                "%s: detail: %s" % (__name__, len(password)))
+                            if len(password)<4:
+                                pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, "You must choose a 4-character minimum PIN.")
+                                self.pamh.conversation(pam_message)
+                                rval = self.pamh.PAM_AUTH_ERR
+                            else:
+                                return self.enroll_user(self.user, password)
 
                         else:
                             syslog.syslog(syslog.LOG_ERR,
@@ -253,7 +255,7 @@ class Authenticator(object):
                 error_msg = result.get("error").get("message")
                 syslog.syslog(syslog.LOG_ERR,
                               "%s: %s" % (__name__, error_msg))
-                pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, error_msg)
+                pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, str(error_msg))
                 self.pamh.conversation(pam_message)
 
         # Save history
@@ -367,7 +369,7 @@ def pam_sm_authenticate(pamh, flags, argv):
     config = _get_config(argv)
     debug = config.get("debug")
     try_first_pass = config.get("try_first_pass")
-    prompt = config.get("prompt", "Your OTP")
+    prompt = config.get("prompt", "Your OTP").replace("_", " ")
     grace_time = config.get("grace")
     if prompt[-1] != ":":
         prompt += ":"
@@ -375,11 +377,19 @@ def pam_sm_authenticate(pamh, flags, argv):
     syslog.openlog(facility=syslog.LOG_AUTH)
 
     Auth = Authenticator(pamh, config)
+
+    # Empty conversation to test password/keyboard_interactive
+    message = pamh.Message(pamh.PAM_TEXT_INFO, " ")
+    response = pamh.conversation(message)
+    if response.resp == '':
+        rval = pamh.PAM_AUTHINFO_UNAVAIL
+        return rval
+
     try:
 
         if grace_time is not None:
             syslog.syslog(syslog.LOG_DEBUG, "Grace period in minutes: %s " % (str(grace_time)))
-            # First we try to check if grace is authorized
+            # First we check if grace is authorized
             if check_last_history(Auth.sqlfile, Auth.user, Auth.rhost, grace_time, window=10):
                 rval = pamh.PAM_SUCCESS
 
@@ -483,7 +493,7 @@ def check_offline_otp(user, otp, sqlfile, window=10, refill=True):
     return res, matching_serial
 
 
-def save_auth_item(sqlfile, user, rhost, serial, tokentype, authitem):
+def save_auth_item(sqlfile, user, serial, tokentype, authitem):
     """
     Save the given authitem to the sqlite file to be used later for offline
     authentication.
@@ -495,7 +505,6 @@ def save_auth_item(sqlfile, user, rhost, serial, tokentype, authitem):
     :param sqlfile: An SQLite file. If it does not exist, it will be generated.
     :type sqlfile: basestring
     :param user: The PAM user
-    :param rhost: The PAM user rhost value
     :param serial: The serial number of the token
     :param tokentype: The type of the token
     :param authitem: A dictionary with all authitem information being:
@@ -567,7 +576,7 @@ def check_last_history(sqlfile, user, rhost, grace_time, window=10):
 
     if len(events)>0:
         for event in events:
-            last_success = event[2]
+            last_success = event[3]
             if last_success is not None:
                 # Get the elapsed time in minutes since last success
                 last_success_delta = datetime.datetime.now() - last_success
