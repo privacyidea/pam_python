@@ -673,7 +673,7 @@ def _create_table(c):
         c.execute("CREATE TABLE IF NOT EXISTS history "
                   "(user text, rhost text, serial text, error_counter int, "
                   "last_success timestamp, last_error timestamp)")
-        c.execute("CREATE UNIQUE INDEX idx_user "
-                    "ON history (user);")
+        c.execute("CREATE UNIQUE NONCLUSTERED INDEX idx_user "
+                    "ON history (user, rhost);")
     except sqlite3.OperationalError:
         pass
