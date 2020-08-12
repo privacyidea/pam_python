@@ -108,7 +108,7 @@ class Authenticator(object):
 
         data = {"user": self.user,
                 "genkey": "1",
-                "pin": "1234",
+                "pin": pin,
                 "type": "email",
                 "dynamic_email": 1}
 
