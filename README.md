@@ -6,7 +6,9 @@ cache future OTP values to enable offline authentication.
 
 To be used like this::
 
+```
    auth   requisite    pam_python.so /path/to/modules/privacyidea-pam.py
+```
 
 It can take the following parameters:
 
@@ -32,7 +34,8 @@ It can take the following parameters:
 
 **api_token=<token>**
 
-   The API Token to access admin REST API for auto-enrolment.
+   The API Token to access admin REST API for auto-enrolment. Requires the following Actions:
+   ``{ "enrollEMAIL": true, "enrollpin": true, "tokenlist": true }``
 
 **grace=<time>**
 
