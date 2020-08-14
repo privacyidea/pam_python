@@ -1,0 +1,10 @@
+image: "python:3.6"
+
+package:
+  stage: build
+  script:
+  - python3 setup.py sdist bdist_wheel
+  artifacts:
+    paths:
+      - dist/*.whl
+    expire_in: 12 mos
