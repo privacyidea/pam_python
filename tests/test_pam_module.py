@@ -221,7 +221,12 @@ class PAMTestCase(unittest.TestCase):
         self.assertTrue(r)
         # Now the offlne values are stored
 
+    @responses.activate
     def test_04_authenticate_offline(self):
+        responses.add(responses.GET,
+                  "http://my.privacyidea.server/token",
+                  body=json.dumps(USER_TOKEN_BODY),
+                  content_type="application/json")
         # and authenticate offline again.
         pamh = PAMH("cornelius", "test100000", "192.168.0.1")
         flags = None
@@ -231,7 +236,12 @@ class PAMTestCase(unittest.TestCase):
         r = pam_sm_authenticate(pamh, flags, argv)
         self.assertTrue(r)
 
+    @responses.activate
     def test_05_two_tokens(self):
+        responses.add(responses.GET,
+                  "http://my.privacyidea.server/token",
+                  body=json.dumps(USER_TOKEN_BODY),
+                  content_type="application/json")
         # Save some values to the database
         r = save_auth_item(SQLFILE,
                            "cornelius",
@@ -276,7 +286,12 @@ class PAMTestCase(unittest.TestCase):
         r = pam_sm_authenticate(pamh, flags, argv)
         self.assertEqual(r, PAMH.PAM_SUCCESS)
 
+    @responses.activate
     def test_06_refill(self):
+        responses.add(responses.GET,
+                  "http://my.privacyidea.server/token",
+                  body=json.dumps(USER_TOKEN_BODY),
+                  content_type="application/json")
         with responses.RequestsMock() as rsps:
             # Get offline OTPs + refill token
             rsps.add(responses.POST,
