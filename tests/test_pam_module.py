@@ -113,9 +113,8 @@ class PAMH(object):
     def get_user(self, dummy):
         return self.user
 
-
     def Message(self, prompt_type, prompt):
-        return message
+        return prompt
 
     class conversation(object):
         def __init__(self, Message):
