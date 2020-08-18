@@ -202,6 +202,7 @@ class PAMTestCase(unittest.TestCase):
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
+        print(r)
         self.assertTrue(r)
         # Now the offlne values are stored
 
