@@ -95,16 +95,30 @@ class PAMH(object):
     PAM_AUTH_ERR = 0
     PAM_SUCCESS = 1
     PAM_SYSTEM_ERR = 2
+    PAM_AUTHINFO_UNAVAIL = 3
 
     exception = Exception
 
-    def __init__(self, user, password, rhost):
+    def __init__(self, user, password, rhost, keyboard_interactive=True):
         self.authtok = password
         self.user = user
         self.rhost = user
+        self.keyboard_interactive = keyboard_interactive
 
     def get_user(self, dummy):
         return self.user
+
+
+    def Message(self, prompt_type, prompt):
+        return message
+
+    class conversation(object):
+        def __init__(self, Message):
+            if Message == " ":
+                if self.keyboard_interactive:
+                    self.resp = None
+                else:
+                    self.resp = ""
 
 
 class PAMTestCase(unittest.TestCase):
@@ -305,3 +319,13 @@ class PAMTestCase(unittest.TestCase):
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
         self.assertNotEqual(r, PAMH.PAM_SUCCESS)
+
+    def test_07_password_auth(self):
+        # Authenticator will return PAM_AUTHINFO_UNAVAIL during password auth
+        pamh = PAMH("cornelius", "test100007", "192.168.0.1")
+        flags = None
+        argv = ["url=http://my.privacyidea.server",
+                "sqlfile=%s" % SQLFILE,
+                "try_first_pass"]
+        r = pam_sm_authenticate(pamh, flags, argv)
+        self.assertEqual(r, PAMH.PAM_AUTHINFO_UNAVAIL)
