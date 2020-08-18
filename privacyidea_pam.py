@@ -422,11 +422,11 @@ def pam_sm_authenticate(pamh, flags, argv):
     Auth = Authenticator(pamh, config)
 
     # Empty conversation to test password/keyboard_interactive
-    message = pamh.Message(pamh.PAM_TEXT_INFO, " ")
-    response = pamh.conversation(message)
-    if response.resp == '':
-        rval = pamh.PAM_AUTHINFO_UNAVAIL
-        return rval
+    # message = pamh.Message(pamh.PAM_TEXT_INFO, " ")
+    # response = pamh.conversation(message)
+    # if response.resp == '':
+    #     rval = pamh.PAM_AUTHINFO_UNAVAIL
+    #     return rval
 
     try:
 
@@ -475,6 +475,10 @@ def pam_sm_authenticate(pamh, flags, argv):
     finally:
         syslog.closelog()
 
+    print(pamh)
+    print(message)
+    print(response)
+    print(rval)
     return rval
 
 

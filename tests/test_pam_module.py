@@ -113,18 +113,18 @@ class PAMH(object):
     def get_user(self, dummy):
         return self.user
 
-    def Message(self, prompt_type, prompt):
-        return prompt
-
-    def conversation(self, message):
-        if message == " ":
-            return Response(None if self.keyboard_interactive else '')
-
-class Response(object):
-
-    def __init__(self, resp, ret_code = 0):
-        self.resp = resp
-        self.ret_code = ret_code
+#     def Message(self, prompt_type, prompt):
+#         return prompt
+#
+#     def conversation(self, message):
+#         if message == " ":
+#             return Response(None if self.keyboard_interactive else '')
+#
+# class Response(object):
+#
+#     def __init__(self, resp, ret_code = 0):
+#         self.resp = resp
+#         self.ret_code = ret_code
 
 
 class PAMTestCase(unittest.TestCase):
