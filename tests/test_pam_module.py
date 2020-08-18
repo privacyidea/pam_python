@@ -117,7 +117,7 @@ class PAMH(object):
         return prompt
 
     def conversation(self, message):
-        if Message == " ":
+        if message == " ":
             return Response(None if self.keyboard_interactive else '')
 
 class Response(object):
