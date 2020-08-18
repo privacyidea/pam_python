@@ -115,28 +115,34 @@ class Authenticator(object):
 
         if self.realm:
             data["realm"] = self.realm
-        json_response = self.make_request(data, endpoint="/token",
-                            api_token=self.api_token, post=False)
 
-        result = json_response.get("result")
-        detail = json_response.get("detail")
+        try:
+            json_response = self.make_request(data, endpoint="/token",
+                                api_token=self.api_token, post=False)
 
-        if self.debug:
-            syslog.syslog(syslog.LOG_DEBUG,
-                          "%s: result: %s" % (__name__, result))
-            syslog.syslog(syslog.LOG_DEBUG,
-                          "%s: detail: %s" % (__name__, detail))
+            result = json_response.get("result")
+            detail = json_response.get("detail")
 
-        if result.get("status"):
-            if result.get("value"):
-                token_count = result.get("value").get("count")
+            if self.debug:
+                syslog.syslog(syslog.LOG_DEBUG,
+                              "%s: result: %s" % (__name__, result))
+                syslog.syslog(syslog.LOG_DEBUG,
+                              "%s: detail: %s" % (__name__, detail))
 
-                if token_count == 0:
-                    return self.enroll_user(self.user)
-                else:
-                    return True
-        else:
-            raise Exception(result.get("error").get("message"))
+            if result.get("status"):
+                if result.get("value"):
+                    token_count = result.get("value").get("count")
+
+                    if token_count == 0:
+                        return self.enroll_user(self.user)
+                    else:
+                        return True
+            else:
+                raise Exception(result.get("error").get("message"))
+
+        except Exception as e:
+            # If the network is not reachable, pass to allow offline auth
+            syslog.syslog(syslog.LOG_DEBUG, "failed to check user's tokens {0!s}".format(e))
 
     def set_pin(self):
         pam_message1 = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_OFF,
