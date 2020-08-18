@@ -475,8 +475,8 @@ def pam_sm_authenticate(pamh, flags, argv):
     finally:
         syslog.closelog()
 
-    print(pamh)
-    return rval
+
+    return pamh
 
 
 def pam_sm_setcred(pamh, flags, argv):
