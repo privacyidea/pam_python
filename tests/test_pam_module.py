@@ -185,6 +185,9 @@ class PAMTestCase(unittest.TestCase):
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
+        print(pamh)
+        print(pamh.authtok)
+        print(pamh.conversation(""))
         self.assertEqual(r, PAMH.PAM_SUCCESS)
 
         # Now there are no offline values left
