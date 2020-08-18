@@ -115,28 +115,34 @@ class Authenticator(object):
 
         if self.realm:
             data["realm"] = self.realm
-        json_response = self.make_request(data, endpoint="/token",
-                            api_token=self.api_token, post=False)
 
-        result = json_response.get("result")
-        detail = json_response.get("detail")
+        try:
+            json_response = self.make_request(data, endpoint="/token",
+                                api_token=self.api_token, post=False)
 
-        if self.debug:
-            syslog.syslog(syslog.LOG_DEBUG,
-                          "%s: result: %s" % (__name__, result))
-            syslog.syslog(syslog.LOG_DEBUG,
-                          "%s: detail: %s" % (__name__, detail))
+            result = json_response.get("result")
+            detail = json_response.get("detail")
 
-        if result.get("status"):
-            if result.get("value"):
-                token_count = result.get("value").get("count")
+            if self.debug:
+                syslog.syslog(syslog.LOG_DEBUG,
+                              "%s: result: %s" % (__name__, result))
+                syslog.syslog(syslog.LOG_DEBUG,
+                              "%s: detail: %s" % (__name__, detail))
 
-                if token_count == 0:
-                    return self.enroll_user(self.user)
-                else:
-                    return True
-        else:
-            raise Exception(result.get("error").get("message"))
+            if result.get("status"):
+                if result.get("value"):
+                    token_count = result.get("value").get("count")
+
+                    if token_count == 0:
+                        return self.enroll_user(self.user)
+                    else:
+                        return True
+            else:
+                raise Exception(result.get("error").get("message"))
+
+        except Exception as e:
+            # If the network is not reachable, pass to allow offline auth
+            syslog.syslog(syslog.LOG_DEBUG, "failed to check user's tokens {0!s}".format(e))
 
     def set_pin(self):
         pam_message1 = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_OFF,
@@ -233,24 +239,24 @@ class Authenticator(object):
         rval = self.pamh.PAM_SYSTEM_ERR
         # First we try to authenticate against the sqlitedb
         r, serial = check_offline_otp(self.user, password, self.sqlfile, window=10)
-        print(syslog.LOG_DEBUG, "offline check returned: {0!s}, {1!s}".format(r, serial))
+        syslog.syslog(syslog.LOG_DEBUG, "offline check returned: {0!s}, {1!s}".format(r, serial))
         if r:
-            print(syslog.LOG_DEBUG,
+            syslog.syslog(syslog.LOG_DEBUG,
                           "%s: successfully authenticated against offline "
                           "database %s" % (__name__, self.sqlfile))
 
             # Try to refill
             try:
                 r = self.offline_refill(serial, password)
-                print(syslog.LOG_DEBUG, "offline refill returned {0!s}".format(r))
+                syslog.syslog(syslog.LOG_DEBUG, "offline refill returned {0!s}".format(r))
             except Exception as e:
                 # If the network is not reachable we will not refill.
-                print(syslog.LOG_DEBUG, "failed to refill {0!s}".format(e))
+                syslog.syslog(syslog.LOG_DEBUG, "failed to refill {0!s}".format(e))
 
             rval = self.pamh.PAM_SUCCESS
         else:
             if self.debug:
-                print(syslog.LOG_DEBUG, "Authenticating %s against %s" %
+                syslog.syslog(syslog.LOG_DEBUG, "Authenticating %s against %s" %
                               (self.user, self.URL))
             data = {"user": self.user,
                     "pass": password}
@@ -264,9 +270,9 @@ class Authenticator(object):
             serial = detail.get("serial", "T%s" % time.time())
             tokentype = detail.get("type", "unknown")
             if self.debug:
-                print(syslog.LOG_DEBUG,
+                syslog.syslog(syslog.LOG_DEBUG,
                               "%s: result: %s" % (__name__, result))
-                print(syslog.LOG_DEBUG,
+                syslog.syslog(syslog.LOG_DEBUG,
                               "%s: detail: %s" % (__name__, detail))
 
             if result.get("status"):
@@ -289,14 +295,14 @@ class Authenticator(object):
                                                            message,
                                                            attributes)
                     else:
-                        print(syslog.LOG_ERR,
+                        syslog.syslog(syslog.LOG_ERR,
                                       "%s: %s" % (__name__, message))
                         pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, message)
                         self.pamh.conversation(pam_message)
                         rval = self.pamh.PAM_AUTH_ERR
             else:
                 error_msg = result.get("error").get("message")
-                print(syslog.LOG_ERR,
+                syslog.syslog(syslog.LOG_ERR,
                               "%s: %s" % (__name__, error_msg))
                 pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, str(error_msg))
                 self.pamh.conversation(pam_message)
@@ -422,16 +428,16 @@ def pam_sm_authenticate(pamh, flags, argv):
     Auth = Authenticator(pamh, config)
 
     # Empty conversation to test password/keyboard_interactive
-    # message = pamh.Message(pamh.PAM_TEXT_INFO, " ")
-    # response = pamh.conversation(message)
-    # if response.resp == '':
-    #     rval = pamh.PAM_AUTHINFO_UNAVAIL
-    #     return rval
+    message = pamh.Message(pamh.PAM_TEXT_INFO, " ")
+    response = pamh.conversation(message)
+    if response.resp == '':
+        rval = pamh.PAM_AUTHINFO_UNAVAIL
+        return rval
 
     try:
 
         if grace_time is not None:
-            print(syslog.LOG_DEBUG,
+            syslog.syslog(syslog.LOG_DEBUG,
                     "Grace period in minutes: %s " % (str(grace_time)))
             # First we check if grace is authorized
             if check_last_history(Auth.sqlfile, Auth.user,
@@ -447,11 +453,9 @@ def pam_sm_authenticate(pamh, flags, argv):
                 message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
                 response = pamh.conversation(message)
                 pamh.authtok = response.resp
-                print(message)
-                print(response)
 
             if debug and try_first_pass:
-                print(syslog.LOG_DEBUG, "%s: running try_first_pass" %
+                syslog.syslog(syslog.LOG_DEBUG, "%s: running try_first_pass" %
                               __name__)
             rval = Auth.authenticate(pamh.authtok)
 
@@ -462,25 +466,21 @@ def pam_sm_authenticate(pamh, flags, argv):
                 message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
                 response = pamh.conversation(message)
                 pamh.authtok = response.resp
-                print(message)
-                print(response)
 
                 rval = Auth.authenticate(pamh.authtok)
 
     except Exception as exx:
-        print(syslog.LOG_ERR, traceback.format_exc())
-        print(syslog.LOG_ERR, "%s: %s" % (__name__, exx))
+        syslog.syslog(syslog.LOG_ERR, traceback.format_exc())
+        syslog.syslog(syslog.LOG_ERR, "%s: %s" % (__name__, exx))
         rval = pamh.PAM_AUTH_ERR
     except requests.exceptions.SSLError:
-        print(syslog.LOG_CRIT, "%s: SSL Validation error. Get a valid "
+        syslog.syslog(syslog.LOG_CRIT, "%s: SSL Validation error. Get a valid "
                                        "SSL certificate for your privacyIDEA "
                                        "system. For testing you can use the "
                                        "options 'nosslverify'." % __name__)
     finally:
         syslog.closelog()
 
-    print(pamh)
-    print(rval)
     return rval
 
 

@@ -121,18 +121,18 @@ class PAMH(object):
     def get_user(self, dummy):
         return self.user
 
-#     def Message(self, prompt_type, prompt):
-#         return prompt
-#
-#     def conversation(self, message):
-#         if message == " ":
-#             return Response(None if self.keyboard_interactive else '')
-#
-# class Response(object):
-#
-#     def __init__(self, resp, ret_code = 0):
-#         self.resp = resp
-#         self.ret_code = ret_code
+    def Message(self, prompt_type, prompt):
+        return prompt
+
+    def conversation(self, message):
+        if message == " ":
+            return Response(None if self.keyboard_interactive else '')
+
+class Response(object):
+
+    def __init__(self, resp, ret_code = 0):
+        self.resp = resp
+        self.ret_code = ret_code
 
 
 class PAMTestCase(unittest.TestCase):
@@ -151,7 +151,7 @@ class PAMTestCase(unittest.TestCase):
     def test_01_check_offline_otp(self):
         # Check with no entries in the database
         r, matching_serial = check_offline_otp("cornelius", "test123456", SQLFILE)
-        self.assertFalse(r)
+        self.assertEqual(r, PAMH.PAM_AUTH_ERR)
         self.assertIsNone(matching_serial)
 
         # Save some values to the database
@@ -164,19 +164,15 @@ class PAMTestCase(unittest.TestCase):
                            ]
                            })
         r, matching_serial = check_offline_otp("cornelius", "test100000", SQLFILE)
-        self.assertTrue(r)
+        self.assertEqual(r, PAMH.PAM_SUCCESS)
         self.assertEqual(matching_serial, "TOK001")
         # Authenticating with the same value a second time, fails
         r, matching_serial = check_offline_otp("cornelius", "test100000", SQLFILE)
-        self.assertFalse(r)
+        self.assertEqual(r, PAMH.PAM_AUTH_ERR)
         self.assertIsNone(matching_serial)
 
     @responses.activate
     def test_02_authenticate_offline(self):
-        responses.add(responses.GET,
-                      "http://my.privacyidea.server/token",
-                      body=json.dumps(USER_TOKEN_BODY),
-                      content_type="application/json")
         responses.add(responses.POST,
                       "http://my.privacyidea.server/validate/check",
                       body=json.dumps(SUCCESS_BODY),
@@ -185,6 +181,7 @@ class PAMTestCase(unittest.TestCase):
         pamh = PAMH("cornelius", "test100001", "192.168.0.1")
         flags = None
         argv = ["url=http://my.privacyidea.server",
+                "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
@@ -194,6 +191,7 @@ class PAMTestCase(unittest.TestCase):
         pamh = PAMH("cornelius", "test100002", "192.168.0.1")
         flags = None
         argv = ["url=http://my.privacyidea.server",
+                "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
@@ -215,33 +213,25 @@ class PAMTestCase(unittest.TestCase):
         pamh = PAMH("cornelius", "test999999", "192.168.0.1")
         flags = None
         argv = ["url=http://my.privacyidea.server",
+                "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
-        self.assertTrue(r)
+        self.assertEqual(r, PAMH.PAM_SUCCESS)
         # Now the offlne values are stored
 
-    @responses.activate
     def test_04_authenticate_offline(self):
-        responses.add(responses.GET,
-                  "http://my.privacyidea.server/token",
-                  body=json.dumps(USER_TOKEN_BODY),
-                  content_type="application/json")
         # and authenticate offline again.
         pamh = PAMH("cornelius", "test100000", "192.168.0.1")
         flags = None
         argv = ["url=http://my.privacyidea.server",
+                "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
-        self.assertTrue(r)
+        self.assertEqual(r, PAMH.PAM_SUCCESS)
 
-    @responses.activate
     def test_05_two_tokens(self):
-        responses.add(responses.GET,
-                  "http://my.privacyidea.server/token",
-                  body=json.dumps(USER_TOKEN_BODY),
-                  content_type="application/json")
         # Save some values to the database
         r = save_auth_item(SQLFILE,
                            "cornelius",
@@ -263,6 +253,7 @@ class PAMTestCase(unittest.TestCase):
         pamh = PAMH("cornelius", "test100001", "192.168.0.1")
         flags = None
         argv = ["url=http://my.privacyidea.server",
+                "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
@@ -272,6 +263,7 @@ class PAMTestCase(unittest.TestCase):
         pamh = PAMH("cornelius", "test100000", "192.168.0.1")
         flags = None
         argv = ["url=http://my.privacyidea.server",
+                "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
@@ -281,6 +273,7 @@ class PAMTestCase(unittest.TestCase):
         pamh = PAMH("cornelius", "TEST100000", "192.168.0.1")
         flags = None
         argv = ["url=http://my.privacyidea.server",
+                "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
@@ -288,10 +281,6 @@ class PAMTestCase(unittest.TestCase):
 
     @responses.activate
     def test_06_refill(self):
-        responses.add(responses.GET,
-                  "http://my.privacyidea.server/token",
-                  body=json.dumps(USER_TOKEN_BODY),
-                  content_type="application/json")
         with responses.RequestsMock() as rsps:
             # Get offline OTPs + refill token
             rsps.add(responses.POST,
@@ -302,6 +291,7 @@ class PAMTestCase(unittest.TestCase):
             pamh = PAMH("cornelius", "test100000", "192.168.0.1")
             flags = None
             argv = ["url=http://my.privacyidea.server",
+                    "debug",
                     "sqlfile=%s" % SQLFILE,
                     "try_first_pass"]
             r = pam_sm_authenticate(pamh, flags, argv)
@@ -311,6 +301,7 @@ class PAMTestCase(unittest.TestCase):
         pamh = PAMH("cornelius", "test100004", "192.168.0.1")
         flags = None
         argv = ["url=http://my.privacyidea.server",
+                "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
@@ -326,19 +317,21 @@ class PAMTestCase(unittest.TestCase):
             pamh = PAMH("cornelius", "test100001", "192.168.0.1")
             flags = None
             argv = ["url=http://my.privacyidea.server",
+                    "debug",
                     "sqlfile=%s" % SQLFILE,
                     "try_first_pass"]
             r = pam_sm_authenticate(pamh, flags, argv)
             self.assertEqual(r, PAMH.PAM_SUCCESS)
 
             self.assertIn('refilltoken=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                          rsps.calls[0].request.body)
+                          rsps.calls[1].request.body)
 
         # authenticate with refilled
         with responses.RequestsMock() as rsps:
             pamh = PAMH("cornelius", "test100004", "192.168.0.1")
             flags = None
             argv = ["url=http://my.privacyidea.server",
+                    "debug",
                     "sqlfile=%s" % SQLFILE,
                     "try_first_pass"]
             r = pam_sm_authenticate(pamh, flags, argv)
@@ -346,12 +339,13 @@ class PAMTestCase(unittest.TestCase):
 
             # using new refill token
             self.assertIn('refilltoken=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-                          rsps.calls[0].request.body)
+                          rsps.calls[1].request.body)
 
         # ... but not twice
         pamh = PAMH("cornelius", "test100004", "192.168.0.1")
         flags = None
         argv = ["url=http://my.privacyidea.server",
+                "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
@@ -359,9 +353,10 @@ class PAMTestCase(unittest.TestCase):
 
     def test_07_password_auth(self):
         # Authenticator will return PAM_AUTHINFO_UNAVAIL during password auth
-        pamh = PAMH("cornelius", "test100007", "192.168.0.1")
+        pamh = PAMH("cornelius", "test100007", "192.168.0.1", False)
         flags = None
         argv = ["url=http://my.privacyidea.server",
+                "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
