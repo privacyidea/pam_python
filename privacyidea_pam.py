@@ -447,6 +447,8 @@ def pam_sm_authenticate(pamh, flags, argv):
                 message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
                 response = pamh.conversation(message)
                 pamh.authtok = response.resp
+                print(message)
+                print(response)
 
             if debug and try_first_pass:
                 syslog.syslog(syslog.LOG_DEBUG, "%s: running try_first_pass" %
@@ -460,6 +462,8 @@ def pam_sm_authenticate(pamh, flags, argv):
                 message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
                 response = pamh.conversation(message)
                 pamh.authtok = response.resp
+                print(message)
+                print(response)
 
                 rval = Auth.authenticate(pamh.authtok)
 
@@ -475,8 +479,9 @@ def pam_sm_authenticate(pamh, flags, argv):
     finally:
         syslog.closelog()
 
-
-    return pamh
+    print(pamh)
+    print(rval)
+    return rval
 
 
 def pam_sm_setcred(pamh, flags, argv):
