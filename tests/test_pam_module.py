@@ -97,6 +97,11 @@ class PAMH(object):
     PAM_SYSTEM_ERR = 2
     PAM_AUTHINFO_UNAVAIL = 3
 
+    PAM_PROMPT_ECHO_OFF = 11
+    PAM_PROMPT_ECHO_ON = 12
+    PAM_ERROR_MSG = 13
+    PAM_TEXT_INFO = 14
+
     exception = Exception
 
     def __init__(self, user, password, rhost, keyboard_interactive=True):
