@@ -476,9 +476,6 @@ def pam_sm_authenticate(pamh, flags, argv):
         syslog.closelog()
 
     print(pamh)
-    print(message)
-    print(response)
-    print(rval)
     return rval
 
 
