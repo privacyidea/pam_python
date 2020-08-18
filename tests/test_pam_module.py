@@ -89,6 +89,14 @@ FAIL_BODY = {"detail": {"message": "wrong otp value"},
                 "version": "privacyIDEA unknown"
 }
 
+USER_TOKEN_BODY = { "id": 1,
+                    "jsonrpc": "2.0",
+                    "result": {"status": True,
+                               "value": {
+                                    "count" : 1
+                               }
+                    }
+}
 
 class PAMH(object):
 
@@ -165,6 +173,10 @@ class PAMTestCase(unittest.TestCase):
 
     @responses.activate
     def test_02_authenticate_offline(self):
+        responses.add(responses.GET,
+                      "http://my.privacyidea.server/token",
+                      body=json.dumps(USER_TOKEN_BODY),
+                      content_type="application/json")
         responses.add(responses.POST,
                       "http://my.privacyidea.server/validate/check",
                       body=json.dumps(SUCCESS_BODY),
@@ -192,6 +204,10 @@ class PAMTestCase(unittest.TestCase):
     @responses.activate
     def test_03_authenticate_online(self):
         # authenticate online and fetch offline values
+        responses.add(responses.GET,
+                      "http://my.privacyidea.server/token",
+                      body=json.dumps(USER_TOKEN_BODY),
+                      content_type="application/json")
         responses.add(responses.POST,
                       "http://my.privacyidea.server/validate/check",
                       body=json.dumps(SUCCESS_BODY),
@@ -202,7 +218,6 @@ class PAMTestCase(unittest.TestCase):
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
         r = pam_sm_authenticate(pamh, flags, argv)
-        print(r)
         self.assertTrue(r)
         # Now the offlne values are stored
 
