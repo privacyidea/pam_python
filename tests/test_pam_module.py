@@ -180,7 +180,8 @@ class PAMTestCase(unittest.TestCase):
 
         pamh = PAMH("cornelius", "test100001", "192.168.0.1")
         flags = None
-        argv = ["url=http://my.privacyidea.server",
+        argv = ["/path/privacyidea_pam.py",
+                "url=http://my.privacyidea.server",
                 "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
@@ -190,7 +191,8 @@ class PAMTestCase(unittest.TestCase):
         # Authenticate the second time offline
         pamh = PAMH("cornelius", "test100002", "192.168.0.1")
         flags = None
-        argv = ["url=http://my.privacyidea.server",
+        argv = ["/path/privacyidea_pam.py",
+                "url=http://my.privacyidea.server",
                 "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
@@ -212,7 +214,9 @@ class PAMTestCase(unittest.TestCase):
                       content_type="application/json")
         pamh = PAMH("cornelius", "test999999", "192.168.0.1")
         flags = None
-        argv = ["url=http://my.privacyidea.server",
+        argv = ["/path/privacyidea_pam.py",
+                "url=http://my.privacyidea.server",
+                "users=cornelius,cornelius3",
                 "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
@@ -224,7 +228,8 @@ class PAMTestCase(unittest.TestCase):
         # and authenticate offline again.
         pamh = PAMH("cornelius", "test100000", "192.168.0.1")
         flags = None
-        argv = ["url=http://my.privacyidea.server",
+        argv = ["/path/privacyidea_pam.py",
+                "url=http://my.privacyidea.server",
                 "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
@@ -252,7 +257,8 @@ class PAMTestCase(unittest.TestCase):
 
         pamh = PAMH("cornelius", "test100001", "192.168.0.1")
         flags = None
-        argv = ["url=http://my.privacyidea.server",
+        argv = ["/path/privacyidea_pam.py",
+                "url=http://my.privacyidea.server",
                 "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
@@ -262,7 +268,8 @@ class PAMTestCase(unittest.TestCase):
         # An older OTP value of the first token is deleted
         pamh = PAMH("cornelius", "test100000", "192.168.0.1")
         flags = None
-        argv = ["url=http://my.privacyidea.server",
+        argv = ["/path/privacyidea_pam.py",
+            "url=http://my.privacyidea.server",
                 "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
@@ -272,7 +279,8 @@ class PAMTestCase(unittest.TestCase):
         # An older value with another token can authenticate!
         pamh = PAMH("cornelius", "TEST100000", "192.168.0.1")
         flags = None
-        argv = ["url=http://my.privacyidea.server",
+        argv = ["/path/privacyidea_pam.py",
+                "url=http://my.privacyidea.server",
                 "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
@@ -290,7 +298,8 @@ class PAMTestCase(unittest.TestCase):
 
             pamh = PAMH("cornelius", "test100000", "192.168.0.1")
             flags = None
-            argv = ["url=http://my.privacyidea.server",
+            argv = ["/path/privacyidea_pam.py",
+                    "url=http://my.privacyidea.server",
                     "debug",
                     "sqlfile=%s" % SQLFILE,
                     "try_first_pass"]
@@ -300,7 +309,8 @@ class PAMTestCase(unittest.TestCase):
         # OTP value not known yet, online auth does not work
         pamh = PAMH("cornelius", "test100004", "192.168.0.1")
         flags = None
-        argv = ["url=http://my.privacyidea.server",
+        argv = ["/path/privacyidea_pam.py",
+                "url=http://my.privacyidea.server",
                 "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
@@ -316,7 +326,8 @@ class PAMTestCase(unittest.TestCase):
 
             pamh = PAMH("cornelius", "test100001", "192.168.0.1")
             flags = None
-            argv = ["url=http://my.privacyidea.server",
+            argv = ["/path/privacyidea_pam.py",
+                    "url=http://my.privacyidea.server",
                     "debug",
                     "sqlfile=%s" % SQLFILE,
                     "try_first_pass"]
@@ -330,7 +341,8 @@ class PAMTestCase(unittest.TestCase):
         with responses.RequestsMock() as rsps:
             pamh = PAMH("cornelius", "test100004", "192.168.0.1")
             flags = None
-            argv = ["url=http://my.privacyidea.server",
+            argv = ["/path/privacyidea_pam.py",
+                    "url=http://my.privacyidea.server",
                     "debug",
                     "sqlfile=%s" % SQLFILE,
                     "try_first_pass"]
@@ -344,7 +356,8 @@ class PAMTestCase(unittest.TestCase):
         # ... but not twice
         pamh = PAMH("cornelius", "test100004", "192.168.0.1")
         flags = None
-        argv = ["url=http://my.privacyidea.server",
+        argv = ["/path/privacyidea_pam.py",
+                "url=http://my.privacyidea.server",
                 "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]
@@ -355,7 +368,21 @@ class PAMTestCase(unittest.TestCase):
         # Authenticator will return PAM_AUTHINFO_UNAVAIL during password auth
         pamh = PAMH("cornelius", "test100007", "192.168.0.1", False)
         flags = None
-        argv = ["url=http://my.privacyidea.server",
+        argv = ["/path/privacyidea_pam.py",
+                "url=http://my.privacyidea.server",
+                "debug",
+                "sqlfile=%s" % SQLFILE,
+                "try_first_pass"]
+        r = pam_sm_authenticate(pamh, flags, argv)
+        self.assertEqual(r, PAMH.PAM_AUTHINFO_UNAVAIL)
+
+    def test_08_user_filtering(self):
+        # Authenticator will return PAM_AUTHINFO_UNAVAIL as user not in list
+        pamh = PAMH("cornelius", "test100007", "192.168.0.1", False)
+        flags = None
+        argv = ["/path/privacyidea_pam.py",
+                "url=http://my.privacyidea.server",
+                "users=cornelius2,cornelius3",
                 "debug",
                 "sqlfile=%s" % SQLFILE,
                 "try_first_pass"]

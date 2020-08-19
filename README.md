@@ -41,6 +41,11 @@ It can take the following parameters:
 
    Grace time in minutes.
 
+**users=<list,of,users>**
+
+   Comma-separated list of users to apply the plugin to.
+   If not specified, apply to all users.
+
 **sqlfile=<file>**
 
    This is the SQLite file that is used to store the offline authentication

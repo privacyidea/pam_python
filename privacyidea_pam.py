@@ -59,9 +59,10 @@ def _get_config(argv):
     :return: dictionary with the parameters
     """
     config = {}
+    argv.pop(0)
     if len(argv) == 1 and "config_file" in argv[0]:
         with open(argv[0].split("=")[1], "r") as ymlfile:
-            config = yaml.load(ymlfile, Loader=yaml.BaseLoader)
+            config = yaml.load(ymlfile, Loader=yaml.SafeLoader)
     else:
         for arg in argv:
             argument = arg.split("=")
@@ -117,15 +118,19 @@ class Authenticator(object):
         return json_response
 
 
-    def check_user_filtered(self, user, user_filter):
+    def check_user_filtering(self, user, user_filter):
         if len(user_filter)>0:
             if user in user_filter:
                 syslog.syslog(syslog.LOG_DEBUG,
-                    "User %s is filtered" % user)
-                return True
-            else:
+                    "User %s requires 2FA" % user)
                 return False
+            else:
+                syslog.syslog(syslog.LOG_DEBUG,
+                    "User %s does not require 2FA" % user)
+                return True
         else:
+            syslog.syslog(syslog.LOG_DEBUG,
+                "No User filtering")
             return False
 
     def check_user_tokens(self, user):
@@ -458,7 +463,7 @@ def pam_sm_authenticate(pamh, flags, argv):
         return rval
 
     # Check if user is excluded
-    if Auth.check_user_filtered(Auth.user, user_filter):
+    if Auth.check_user_filtering(Auth.user, user_filter):
         return pamh.PAM_AUTHINFO_UNAVAIL
 
     try:
