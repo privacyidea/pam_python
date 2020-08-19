@@ -14,9 +14,9 @@ package:
   image: "python:2.7"
   script:
   - python2 setup.py sdist bdist_wheel
-  - date > build_date.txt
+  - date > build_date.html
   artifacts:
     paths:
       - dist/*.whl
-      - build_date.txt
+      - build_date.html
     expire_in: 12 mos
