@@ -18,5 +18,5 @@ package:
   artifacts:
     paths:
       - dist/*.whl
-      - build_date
+      - build_date.txt
     expire_in: 12 mos
