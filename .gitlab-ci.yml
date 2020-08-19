@@ -14,7 +14,7 @@ package:
   image: "python:2.7"
   script:
   - python2 setup.py sdist bdist_wheel
-  - date > build_date
+  - date > build_date.txt
   artifacts:
     paths:
       - dist/*.whl
