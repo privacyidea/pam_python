@@ -7,7 +7,8 @@ VERSION = "2.11dev0"
 
 install_requires = [
     'requests>=2.23',
-    'passlib>=1.7.2'
+    'passlib>=1.7.2',
+    'pyyaml'
 ]
 
 setup(
