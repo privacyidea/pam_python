@@ -47,6 +47,7 @@ import passlib.hash
 import time
 import traceback
 import datetime
+import yaml
 
 
 def _get_config(argv):
@@ -58,12 +59,16 @@ def _get_config(argv):
     :return: dictionary with the parameters
     """
     config = {}
-    for arg in argv:
-        argument = arg.split("=")
-        if len(argument) == 1:
-            config[argument[0]] = True
-        elif len(argument) == 2:
-            config[argument[0]] = argument[1]
+    if len(argv) == 1 and "config_file" in argv[0]:
+        with open(argv[0].split("=")[1], "r") as ymlfile:
+            config = yaml.load(ymlfile, Loader=yaml.BaseLoader)
+    else:
+        for arg in argv:
+            argument = arg.split("=")
+            if len(argument) == 1:
+                config[argument[0]] = True
+            elif len(argument) == 2:
+                config[argument[0]] = argument[1]
     return config
 
 
