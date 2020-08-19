@@ -69,6 +69,11 @@ def _get_config(argv):
                 config[argument[0]] = True
             elif len(argument) == 2:
                 config[argument[0]] = argument[1]
+    # Users filter
+    if config.get("users") is not None:
+        config["users"] = config.get("users").split(',')
+    else:
+        config["users"] = []
     return config
 
 
@@ -110,6 +115,18 @@ class Authenticator(object):
             json_response = json_response()
 
         return json_response
+
+
+    def check_user_filtered(self, user, user_filter):
+        if len(user_filter)>0:
+            if user in user_filter:
+                syslog.syslog(syslog.LOG_DEBUG,
+                    "User %s is filtered" % user)
+                return True
+            else:
+                return False
+        else:
+            return False
 
     def check_user_tokens(self, user):
         # Check the tokens of a user
@@ -425,6 +442,7 @@ def pam_sm_authenticate(pamh, flags, argv):
     try_first_pass = config.get("try_first_pass")
     prompt = config.get("prompt", "Your OTP").replace("_", " ")
     grace_time = config.get("grace")
+    user_filter = config.get("users")
     if prompt[-1] != ":":
         prompt += ":"
     rval = pamh.PAM_AUTH_ERR
@@ -438,6 +456,10 @@ def pam_sm_authenticate(pamh, flags, argv):
     if response.resp == '':
         rval = pamh.PAM_AUTHINFO_UNAVAIL
         return rval
+
+    # Check if user is excluded
+    if Auth.check_user_filtered(Auth.user, user_filter):
+        return pamh.PAM_AUTHINFO_UNAVAIL
 
     try:
 
