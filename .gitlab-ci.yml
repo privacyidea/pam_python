@@ -13,6 +13,9 @@ tox:
 package:
   stage: build
   image: "python:2.7"
+  only:
+    refs:
+      - master
   variables:
     TWINE_USERNAME: "pypi_token"
     TWINE_REPOSITORY_URL: "https://git.server.mila.quebec/api/v4/projects/83/packages/pypi"
@@ -24,6 +27,9 @@ package:
 
 update_login_nodes:
   stage: deploy
+  only:
+    refs:
+      - master
   variables:
     ANSIBLE_TAGS: '--tags 2fa'
   trigger: idt/provisioning/environment
