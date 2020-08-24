@@ -15,9 +15,11 @@ package:
   variables:
     TWINE_USERNAME: "pypi_token"
     TWINE_REPOSITORY_URL: "https://git.server.mila.quebec/api/v4/projects/83/packages/pypi"
+  before_script:
+    - pip install twine
   script:
-  - python2 setup.py sdist bdist_wheel
-  - python2 -m twine upload --repository gitlab dist/*
+    - python2 setup.py sdist bdist_wheel
+    - python2 -m twine upload --repository gitlab dist/*
   # - date > build_date.html
   # artifacts:
   #   paths:
