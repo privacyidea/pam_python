@@ -1,6 +1,7 @@
 stages:
   - test
   - build
+  - deploy
 
 tox:
   stage: test
@@ -20,9 +21,9 @@ package:
   script:
     - python2 setup.py sdist bdist_wheel
     - python2 -m twine upload dist/*
-  # - date > build_date.html
-  # artifacts:
-  #   paths:
-  #     - dist/*.whl
-  #     - build_date.html
-  #   expire_in: 12 mos
+
+update_login_nodes:
+  stage: deploy
+  variables:
+    ANSIBLE_TAGS: '--tags 2fa'
+  trigger: idt/provisioning/environment
