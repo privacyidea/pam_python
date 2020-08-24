@@ -19,7 +19,7 @@ package:
     - pip install twine
   script:
     - python2 setup.py sdist bdist_wheel
-    - python2 -m twine upload --repository gitlab dist/*
+    - python2 -m twine upload dist/*
   # - date > build_date.html
   # artifacts:
   #   paths:
