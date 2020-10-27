@@ -48,6 +48,7 @@ import time
 import traceback
 import datetime
 import yaml
+import re
 
 
 def _get_config(argv):
@@ -70,11 +71,27 @@ def _get_config(argv):
                 config[argument[0]] = True
             elif len(argument) == 2:
                 config[argument[0]] = argument[1]
-    # Users filter
+    # User filter
     if config.get("users") is not None:
         config["users"] = config.get("users").split(',')
     else:
         config["users"] = []
+    # SQL Connection type/default
+    if config.get("mysql") is not None:
+        mysql_settings = re.match("mysql://([^:]+):([^@]+)@([^:/]+):([0-9]+)/(.+)", config.get("mysql"))
+        config["sql"] = {
+            'lite': False,
+            'user': mysql_settings.group(1),
+            'password': mysql_settings.group(2),
+            'host': mysql_settings.group(3),
+            'port': mysql_settings.group(4),
+            'database': mysql_settings.group(5)
+        }
+    else:
+        config["sql"] = {
+            'lite': True,
+            'file': config.get("sqlfile", "/etc/privacyidea/pam.sqlite")
+        }
     return config
 
 
@@ -94,7 +111,7 @@ class Authenticator(object):
         self.realm = config.get("realm")
         self.debug = config.get("debug")
         self.api_token = config.get("api_token")
-        self.sqlfile = config.get("sqlfile", "/etc/privacyidea/pam.sqlite")
+        self.sql = config.get("sql")
 
     def make_request(self, data, endpoint="/validate/check",
                         api_token=None, post=True):
@@ -226,14 +243,14 @@ class Authenticator(object):
     def offline_refill(self, serial, password):
 
         # get refilltoken
-        conn = sqlite3.connect(self.sqlfile)
-        c = conn.cursor()
+        startdb(self.sql)
         refilltoken = None
         # get all possible serial/tokens for a user
         for row in c.execute("SELECT refilltoken FROM refilltokens WHERE serial=?",
                              (serial, )):
             refilltoken = row[0]
             syslog.syslog("Doing refill with token {0!s}".format(refilltoken))
+        closedb()
 
         if refilltoken:
             data = {"serial": serial,
@@ -253,7 +270,7 @@ class Authenticator(object):
 
             if result.get("status"):
                 if result.get("value"):
-                    save_auth_item(self.sqlfile, self.user, serial, tokentype,
+                    save_auth_item(self.sql, self.user, serial, tokentype,
                                    auth_item)
                     return True
             else:
@@ -264,13 +281,13 @@ class Authenticator(object):
 
     def authenticate(self, password):
         rval = self.pamh.PAM_SYSTEM_ERR
-        # First we try to authenticate against the sqlitedb
-        r, serial = check_offline_otp(self.user, password, self.sqlfile, window=10)
+        # First we try to authenticate against the sqldb
+        r, serial = check_offline_otp(self.sql, self.user, password, window=10)
         syslog.syslog(syslog.LOG_DEBUG, "offline check returned: {0!s}, {1!s}".format(r, serial))
         if r:
             syslog.syslog(syslog.LOG_DEBUG,
                           "%s: successfully authenticated against offline "
-                          "database %s" % (__name__, self.sqlfile))
+                          "database" % (__name__))
 
             # Try to refill
             try:
@@ -305,7 +322,7 @@ class Authenticator(object):
             if result.get("status"):
                 if result.get("value"):
                     rval = self.pamh.PAM_SUCCESS
-                    save_auth_item(self.sqlfile, self.user, serial, tokentype,
+                    save_auth_item(self.sql, self.user, serial, tokentype,
                                    auth_item)
                 else:
                     transaction_id = detail.get("transaction_id")
@@ -335,7 +352,7 @@ class Authenticator(object):
                 self.pamh.conversation(pam_message)
 
         # Save history
-        save_history_item(self.sqlfile, self.user, self.rhost, serial,
+        save_history_item(self.sql, self.user, self.rhost, serial,
             (True if rval == self.pamh.PAM_SUCCESS else False))
         return rval
 
@@ -472,7 +489,7 @@ def pam_sm_authenticate(pamh, flags, argv):
             syslog.syslog(syslog.LOG_DEBUG,
                     "Grace period in minutes: %s " % (str(grace_time)))
             # First we check if grace is authorized
-            if check_last_history(Auth.sqlfile, Auth.user,
+            if check_last_history(Auth.sql, Auth.user,
                         Auth.rhost, grace_time, window=10):
                 rval = pamh.PAM_SUCCESS
 
@@ -536,22 +553,21 @@ def pam_sm_chauthtok(pamh, flags, argv):
     return pamh.PAM_SUCCESS
 
 
-def check_offline_otp(user, otp, sqlfile, window=10, refill=True):
+def check_offline_otp(sql_params, user, otp, window=10, refill=True):
     """
     compare the given otp values with the next hashes of the user.
 
     DB entries older than the matching counter will be deleted from the
     database.
 
+    :param sql_params: MySQL/SQLite connection parameters
+    :type sql_params: dict
     :param user: The local user in the sql file
     :param otp: The otp value
-    :param sqlfile: The sqlite file
     :return: Tuple of (True or False, serial)
     """
     res = False
-    conn = sqlite3.connect(sqlfile)
-    c = conn.cursor()
-    _create_table(c)
+    startdb(sql_params)
     # get all possible serial/tokens for a user
     serials = []
     matching_serial = None
@@ -575,22 +591,22 @@ def check_offline_otp(user, otp, sqlfile, window=10, refill=True):
     if res:
         c.execute("DELETE from authitems WHERE counter <= ? and serial = ?",
                   (matching_counter, matching_serial))
-        conn.commit()
-    conn.close()
+
+    closedb()
     return res, matching_serial
 
 
-def save_auth_item(sqlfile, user, serial, tokentype, authitem):
+def save_auth_item(sql_params, user, serial, tokentype, authitem):
     """
-    Save the given authitem to the sqlite file to be used later for offline
+    Save the given authitem to the sqldb file to be used later for offline
     authentication.
 
     There is only one table in it with the columns:
 
         username, counter, otp
 
-    :param sqlfile: An SQLite file. If it does not exist, it will be generated.
-    :type sqlfile: basestring
+    :param sql_params: MySQL/SQLite connection parameters
+    :type sql_params: dict
     :param user: The PAM user
     :param serial: The serial number of the token
     :param tokentype: The type of the token
@@ -599,10 +615,7 @@ def save_auth_item(sqlfile, user, serial, tokentype, authitem):
 
     :return:
     """
-    conn = sqlite3.connect(sqlfile)
-    c = conn.cursor()
-    # Create the table if necessary
-    _create_table(c)
+    startdb(sql_params)
 
     syslog.syslog(syslog.LOG_DEBUG, "%s: offline save authitem: %s" % (
         __name__, authitem))
@@ -624,22 +637,17 @@ def save_auth_item(sqlfile, user, serial, tokentype, authitem):
         c.execute("INSERT INTO refilltokens (serial, refilltoken) VALUES (?,?)",
                   (serial, refilltoken))
 
-    # Save (commit) the changes
-    conn.commit()
+    closedb()
 
-    # We can also close the connection if we are done with it.
-    # Just be sure any changes have been committed or they will be lost.
-    conn.close()
-
-def check_last_history(sqlfile, user, rhost, grace_time, window=10):
+def check_last_history(sql_params, user, rhost, grace_time, window=10):
     """
     Get the last event for this user.
 
     If success reset the error counter.
     If error increment the error counter.
 
-    :param sqlfile: An SQLite file. If it does not exist, it will be generated.
-    :type sqlfile: basestring
+    :param sql_params: MySQL/SQLite connection parameters
+    :type sql_params: dict
     :param user: The PAM user
     :param rhost: The PAM user rhost value
     :param serial: The serial number of the token
@@ -647,10 +655,7 @@ def check_last_history(sqlfile, user, rhost, grace_time, window=10):
 
     :return:
     """
-    conn = sqlite3.connect(sqlfile, detect_types=sqlite3.PARSE_DECLTYPES)
-    c = conn.cursor()
-    # Create the table if necessary
-    _create_table(c)
+    startdb(sql_params)
 
     res = False
     events = []
@@ -683,20 +688,19 @@ def check_last_history(sqlfile, user, rhost, grace_time, window=10):
         syslog.syslog(syslog.LOG_DEBUG, "%s: No history for: %s" % (
             __name__, user))
 
-
-    conn.close()
+    closedb()
     return res
 
 
-def save_history_item(sqlfile, user, rhost, serial, success):
+def save_history_item(sql_params, user, rhost, serial, success):
     """
     Save the given success/error event.
 
     If success reset the error counter.
     If error increment the error counter.
 
-    :param sqlfile: An SQLite file. If it does not exist, it will be generated.
-    :type sqlfile: basestring
+    :param sql_params: MySQL/SQLite connection parameters
+    :type sql_params: dict
     :param user: The PAM user
     :param rhost: The PAM user rhost value
     :param serial: The serial number of the token
@@ -704,10 +708,7 @@ def save_history_item(sqlfile, user, rhost, serial, success):
 
     :return:
     """
-    conn = sqlite3.connect(sqlfile, detect_types=sqlite3.PARSE_DECLTYPES)
-    c = conn.cursor()
-    # Create the table if necessary
-    _create_table(c)
+    startdb(sql_params)
 
     syslog.syslog(syslog.LOG_DEBUG, "%s: offline save event: %s" % (
         __name__, ("success" if success else "error")))
@@ -729,39 +730,44 @@ def save_history_item(sqlfile, user, rhost, serial, success):
                       "error_counter, last_error) VALUES (?,?,?,?,?)",
                       (user, rhost, serial, 1, datetime.datetime.now()))
 
+    closedb()
 
-    # Save (commit) the changes
+
+# Start connection and create cursor
+def startdb(sql_params):
+    global conn, c
+    # Create connection
+    if sql_params["lite"]:
+        conn = sqlite3.connect(sql_params["file"], detect_types=sqlite3.PARSE_DECLTYPES)
+        # Create a cursor object
+        c = conn.cursor()
+    else:
+        print("Mysql")
+        # mysql.connector.connect(**connection_config_dict)
+
+    # Create table if does not exist
+    _create_table()
+
+# Commit and close db
+def closedb():
+    # Commit changes
     conn.commit()
-
-    # We can also close the connection if we are done with it.
-    # Just be sure any changes have been committed or they will be lost.
+    # Close connections
     conn.close()
 
-
-def _create_table(c):
+def _create_table():
     """
     Create table if necessary
     :param c: The connection cursor
     """
-    try:
-        c.execute("CREATE TABLE IF NOT EXISTS authitems "
-                  "(counter int, user text, serial text, tokenowner text,"
-                  "otp text, tokentype text)")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        # create refilltokens table
-        c.execute("CREATE TABLE IF NOT EXISTS refilltokens (serial text, refilltoken text)")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        # create history table
-        c.execute("CREATE TABLE IF NOT EXISTS history "
-                  "(user text, rhost text, serial text, error_counter int, "
-                  "last_success timestamp, last_error timestamp)")
-        c.execute("CREATE UNIQUE INDEX idx_user "
-                    "ON history (user, rhost);")
-    except sqlite3.OperationalError:
-        pass
+    c.execute("CREATE TABLE IF NOT EXISTS authitems "
+              "(counter int, user text, serial text, tokenowner text,"
+              "otp text, tokentype text)")
+    # create refilltokens table
+    c.execute("CREATE TABLE IF NOT EXISTS refilltokens (serial text, refilltoken text)")
+    # create history table
+    c.execute("CREATE TABLE IF NOT EXISTS history "
+              "(user text, rhost text, serial text, error_counter int, "
+              "last_success timestamp, last_error timestamp)")
+    c.execute("CREATE UNIQUE INDEX idx_user "
+                "ON history (user, rhost);")

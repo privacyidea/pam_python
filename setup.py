@@ -2,8 +2,7 @@
 
 from setuptools import setup
 
-#VERSION="2.1dev4"
-VERSION = "2.11dev0"
+VERSION = "2.12dev0"
 
 install_requires = [
     'requests>=2.23',
