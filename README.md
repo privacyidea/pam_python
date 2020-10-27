@@ -51,3 +51,9 @@ It can take the following parameters:
    This is the SQLite file that is used to store the offline authentication
    information.
    The default file is /etc/privacyidea/pam.sqlite
+
+**mysql=<uri>**
+
+   Use MySQL/MariaDB instead of SQLite to store refill/history tables.
+   URI form: mysql://username:password@host:3306/db_name
+   If absent, fallback to sqlfile

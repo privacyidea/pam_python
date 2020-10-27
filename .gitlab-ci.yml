@@ -12,7 +12,7 @@ tox:
 
 package:
   stage: build
-  image: "python:2.7"
+  image: "python:3.6"
   only:
     refs:
       - master
@@ -22,14 +22,15 @@ package:
   before_script:
     - pip install twine
   script:
-    - python2 setup.py sdist bdist_wheel
-    - python2 -m twine upload dist/*
+    - python3 setup.py sdist bdist_wheel
+    - python3 -m twine upload dist/*
 
+# Production has to be triggered manually
 update_login_nodes:
   stage: deploy
   only:
     refs:
       - master
   variables:
-    ANSIBLE_TAGS: '--tags 2fa'
+    ANSIBLE_TAGS: '2fa'
   trigger: idt/provisioning/environment

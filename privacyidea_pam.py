@@ -42,14 +42,16 @@ The code is tested in test_pam_module.py
 import json
 import requests
 import syslog
-import sqlite3
 import passlib.hash
 import time
 import traceback
 import datetime
 import yaml
+import sqlite3
+import mysql.connector
 import re
 
+SQLite = True
 
 def _get_config(argv):
     """
@@ -59,6 +61,7 @@ def _get_config(argv):
     :param argv:
     :return: dictionary with the parameters
     """
+    global SQLite
     config = {}
     argv.pop(0)
     if len(argv) == 1 and "config_file" in argv[0]:
@@ -78,9 +81,9 @@ def _get_config(argv):
         config["users"] = []
     # SQL Connection type/default
     if config.get("mysql") is not None:
+        SQLite = False
         mysql_settings = re.match("mysql://([^:]+):([^@]+)@([^:/]+):([0-9]+)/(.+)", config.get("mysql"))
         config["sql"] = {
-            'lite': False,
             'user': mysql_settings.group(1),
             'password': mysql_settings.group(2),
             'host': mysql_settings.group(3),
@@ -88,10 +91,7 @@ def _get_config(argv):
             'database': mysql_settings.group(5)
         }
     else:
-        config["sql"] = {
-            'lite': True,
-            'file': config.get("sqlfile", "/etc/privacyidea/pam.sqlite")
-        }
+        config["sql"] = config.get("sqlfile", "/etc/privacyidea/pam.sqlite")
     return config
 
 
@@ -246,10 +246,12 @@ class Authenticator(object):
         startdb(self.sql)
         refilltoken = None
         # get all possible serial/tokens for a user
-        for row in c.execute("SELECT refilltoken FROM refilltokens WHERE serial=?",
-                             (serial, )):
+        c.execute(sql_abstract("SELECT refilltoken FROM refilltokens WHERE serial=?"),
+                             (serial, ))
+        for row in c.fetchall():
             refilltoken = row[0]
             syslog.syslog("Doing refill with token {0!s}".format(refilltoken))
+
         closedb()
 
         if refilltoken:
@@ -484,7 +486,6 @@ def pam_sm_authenticate(pamh, flags, argv):
         return pamh.PAM_AUTHINFO_UNAVAIL
 
     try:
-
         if grace_time is not None:
             syslog.syslog(syslog.LOG_DEBUG,
                     "Grace period in minutes: %s " % (str(grace_time)))
@@ -494,7 +495,6 @@ def pam_sm_authenticate(pamh, flags, argv):
                 rval = pamh.PAM_SUCCESS
 
         if rval != pamh.PAM_SUCCESS:
-
             # Check if user has tokens
             Auth.check_user_tokens(Auth.user)
 
@@ -571,15 +571,18 @@ def check_offline_otp(sql_params, user, otp, window=10, refill=True):
     # get all possible serial/tokens for a user
     serials = []
     matching_serial = None
-    for row in c.execute("SELECT serial, user FROM authitems WHERE user=?"
-                         "GROUP by serial", (user,)):
+
+    c.execute(sql_abstract("SELECT serial, user FROM authitems WHERE user=?"
+                         "GROUP by serial"), (user,))
+    for row in c.fetchall():
         serials.append(row[0])
 
     for serial in serials:
-        for row in c.execute("SELECT counter, user, otp, serial FROM authitems "
+        c.execute(sql_abstract("SELECT counter, user, otp, serial FROM authitems "
                              "WHERE user=? and serial=? ORDER by counter "
-                             "LIMIT ?",
-                             (user, serial, window)):
+                             "LIMIT ?"),
+                             (user, serial, window))
+        for row in c.fetchall():
             hash_value = row[2]
             if passlib.hash.pbkdf2_sha512.verify(otp, hash_value):
                 res = True
@@ -589,7 +592,7 @@ def check_offline_otp(sql_params, user, otp, window=10, refill=True):
 
     # We found a matching password, so we remove the old entries
     if res:
-        c.execute("DELETE from authitems WHERE counter <= ? and serial = ?",
+        c.execute(sql_abstract("DELETE from authitems WHERE counter <= ? and serial = ?"),
                   (matching_counter, matching_serial))
 
     closedb()
@@ -624,17 +627,17 @@ def save_auth_item(sql_params, user, serial, tokentype, authitem):
         tokenowner = offline.get("username")
         for counter, otphash in offline.get("response").items():
             # Insert the OTP hash
-            c.execute("INSERT INTO authitems (counter, user, serial,"
-                      "tokenowner, otp) VALUES (?,?,?,?,?)",
+            c.execute(sql_abstract("INSERT INTO authitems (counter, user, serial,"
+                      "tokenowner, otp) VALUES (?,?,?,?,?)"),
                       (counter, user, serial, tokenowner, otphash))
 
         refilltoken = offline.get("refilltoken")
         # delete old refilltoken
         try:
-            c.execute('DELETE FROM refilltokens WHERE serial=?', (serial,))
+            c.execute(sql_abstract("DELETE FROM refilltokens WHERE serial=?"), (serial,))
         except sqlite3.OperationalError:
             pass
-        c.execute("INSERT INTO refilltokens (serial, refilltoken) VALUES (?,?)",
+        c.execute(sql_abstract("INSERT INTO refilltokens (serial, refilltoken) VALUES (?,?)"),
                   (serial, refilltoken))
 
     closedb()
@@ -660,11 +663,12 @@ def check_last_history(sql_params, user, rhost, grace_time, window=10):
     res = False
     events = []
 
-    for row in c.execute("SELECT user, rhost, serial, last_success, last_error "
+    c.execute(sql_abstract("SELECT user, rhost, serial, last_success, last_error "
                          "FROM history "
                          "WHERE user=? AND rhost=? ORDER by last_success "
-                         "LIMIT ?",
-                         (user, rhost, window)):
+                         "LIMIT ?"),
+                         (user, rhost, window))
+    for row in c.fetchall():
         events.append(row)
 
     if len(events)>0:
@@ -714,37 +718,35 @@ def save_history_item(sql_params, user, rhost, serial, success):
         __name__, ("success" if success else "error")))
     if success:
         # Insert the Event
-        c.execute("INSERT OR REPLACE INTO history (user, rhost, serial,"
-                  "error_counter, last_success) VALUES (?,?,?,?,?)",
+        c.execute(sql_abstract("REPLACE INTO history (user, rhost, serial,"
+                  "error_counter, last_success) VALUES (?,?,?,?,?)"),
                   (user, rhost, serial, 0, datetime.datetime.now()))
     else:
         # Insert the Event
-        c.execute("UPDATE history SET error_counter = error_counter + 1, "
+        c.execute(sql_abstract("UPDATE history SET error_counter = error_counter + 1, "
                     " serial = ? , last_error = ? "
-                    " WHERE user = ? AND rhost = ? ",
+                    " WHERE user = ? AND rhost = ? "),
                   (serial, datetime.datetime.now(), user, rhost))
 
         syslog.syslog(syslog.LOG_DEBUG,"Rows affected : %d " % c.rowcount)
         if c.rowcount == 0:
-            c.execute("INSERT INTO history (user, rhost, serial,"
-                      "error_counter, last_error) VALUES (?,?,?,?,?)",
+            c.execute(sql_abstract("INSERT INTO history (user, rhost, serial,"
+                      "error_counter, last_error) VALUES (?,?,?,?,?)"),
                       (user, rhost, serial, 1, datetime.datetime.now()))
 
     closedb()
-
 
 # Start connection and create cursor
 def startdb(sql_params):
     global conn, c
     # Create connection
-    if sql_params["lite"]:
-        conn = sqlite3.connect(sql_params["file"], detect_types=sqlite3.PARSE_DECLTYPES)
-        # Create a cursor object
-        c = conn.cursor()
+    if SQLite:
+        conn = sqlite3.connect(sql_params, detect_types=sqlite3.PARSE_DECLTYPES)
     else:
-        print("Mysql")
-        # mysql.connector.connect(**connection_config_dict)
+        conn = mysql.connector.connect(**sql_params)
 
+    # Create a cursor object
+    c = conn.cursor()
     # Create table if does not exist
     _create_table()
 
@@ -767,7 +769,26 @@ def _create_table():
     c.execute("CREATE TABLE IF NOT EXISTS refilltokens (serial text, refilltoken text)")
     # create history table
     c.execute("CREATE TABLE IF NOT EXISTS history "
-              "(user text, rhost text, serial text, error_counter int, "
+              "(user varchar(50), rhost varchar(50), serial text, error_counter int, "
               "last_success timestamp, last_error timestamp)")
-    c.execute("CREATE UNIQUE INDEX idx_user "
-                "ON history (user, rhost);")
+    try:
+        # create history table
+        c.execute("CREATE TABLE IF NOT EXISTS history "
+                  "(user text, rhost text, serial text, error_counter int, "
+                  "last_success timestamp, last_error timestamp)")
+        c.execute("CREATE UNIQUE INDEX idx_user "
+                    "ON history (user, rhost);")
+    except mysql.connector.Error as err:
+        if err.errno == mysql.connector.errorcode.ER_DUP_KEYNAME:
+            pass
+        else:
+            raise
+    except sqlite3.OperationalError:
+        pass
+
+# Convert an SQLite statement to MySQL
+def sql_abstract(sql_statement):
+    if SQLite:
+        return sql_statement
+    else:
+        return sql_statement.replace('?','%s')

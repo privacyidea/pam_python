@@ -14,6 +14,7 @@ REFILL_1 = "a" * 80
 REFILL_2 = "b" * 80
 
 SQLFILE = "pam-test.sqlite"
+
 # test100000
 # test100001
 # test100002
@@ -150,7 +151,8 @@ class PAMTestCase(unittest.TestCase):
 
     def test_01_check_offline_otp(self):
         # Check with no entries in the database
-        r, matching_serial = check_offline_otp("cornelius", "test123456", SQLFILE)
+
+        r, matching_serial = check_offline_otp(SQLFILE, "cornelius", "test123456")
         self.assertEqual(r, PAMH.PAM_AUTH_ERR)
         self.assertIsNone(matching_serial)
 
@@ -163,11 +165,11 @@ class PAMTestCase(unittest.TestCase):
                                          "response": RESP}
                            ]
                            })
-        r, matching_serial = check_offline_otp("cornelius", "test100000", SQLFILE)
+        r, matching_serial = check_offline_otp(SQLFILE, "cornelius", "test100000")
         self.assertEqual(r, PAMH.PAM_SUCCESS)
         self.assertEqual(matching_serial, "TOK001")
         # Authenticating with the same value a second time, fails
-        r, matching_serial = check_offline_otp("cornelius", "test100000", SQLFILE)
+        r, matching_serial = check_offline_otp(SQLFILE, "cornelius", "test100000")
         self.assertEqual(r, PAMH.PAM_AUTH_ERR)
         self.assertIsNone(matching_serial)
 
@@ -319,6 +321,10 @@ class PAMTestCase(unittest.TestCase):
 
         # now with refill
         with responses.RequestsMock() as rsps:
+            rsps.add(responses.GET,
+                      "http://my.privacyidea.server/token",
+                      body=json.dumps(USER_TOKEN_BODY),
+                      content_type="application/json")
             rsps.add(responses.POST,
                           "http://my.privacyidea.server/validate/offlinerefill",
                           body=json.dumps(REFILL_BODY),
@@ -333,7 +339,6 @@ class PAMTestCase(unittest.TestCase):
                     "try_first_pass"]
             r = pam_sm_authenticate(pamh, flags, argv)
             self.assertEqual(r, PAMH.PAM_SUCCESS)
-
             self.assertIn('refilltoken=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                           rsps.calls[1].request.body)
 
