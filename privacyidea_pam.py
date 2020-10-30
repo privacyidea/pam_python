@@ -50,6 +50,8 @@ import yaml
 import sqlite3
 import mysql.connector
 import re
+import pyqrcode
+import urllib
 
 SQLite = True
 
@@ -188,6 +190,33 @@ class Authenticator(object):
             # If the network is not reachable, pass to allow offline auth
             syslog.syslog(syslog.LOG_DEBUG, "failed to check user's tokens {0!s}".format(e))
 
+    def set_token_type(self):
+        enroll_data = {"user": self.user,
+                        "genkey": "1"}
+        pam_message_choice = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_ON,
+                "Please choose the token to generate:\n"
+                "[1] Email\n"
+                "[2] Push (Android Only)\n"
+                "[3] Google Authenticator\n")
+        response_choice = self.pamh.conversation(pam_message_choice)
+        syslog.syslog(syslog.LOG_DEBUG,
+              "%s: Choice %s" % (__name__, response_choice.resp))
+        syslog.syslog(syslog.LOG_DEBUG,
+              "%s: Choice %s" % (__name__, type(response_choice.resp)))
+        if response_choice.resp == "1":
+            enroll_data["type"] = "email"
+            enroll_data["dynamic_email"] = 1
+        elif response_choice.resp == "2":
+            enroll_data["type"] = "push"
+        elif response_choice.resp == "3":
+            enroll_data["type"] = "totp"
+        else:
+            pam_message3 = self.pamh.Message(self.pamh.PAM_TEXT_INFO,
+                "Not a valid choice. Please try again")
+            info = self.pamh.conversation(pam_message3)
+            return self.set_token_type()
+        return enroll_data
+
     def set_pin(self):
         pam_message1 = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_OFF,
                         "Please choose a 4-digit minimum PIN: ")
@@ -212,13 +241,10 @@ class Authenticator(object):
         pam_message = self.pamh.Message(self.pamh.PAM_TEXT_INFO,
                         "You don't any have token yet.")
         info = self.pamh.conversation(pam_message)
-        pin = self.set_pin()
-
-        data = {"user": self.user,
-                "genkey": "1",
-                "pin": pin,
-                "type": "email",
-                "dynamic_email": 1}
+        # Token type choosing
+        data = self.set_token_type()
+        # Ask for pin
+        data["pin"] = self.set_pin()
 
         if self.realm:
             data["realm"] = self.realm
@@ -236,6 +262,19 @@ class Authenticator(object):
                           "%s: detail: %s" % (__name__, detail))
         if result.get("status"):
             if result.get("value"):
+                # Display QR Code if any
+                otp_link = False
+                if "pushurl" in detail:
+                    otp_link = detail["pushurl"]["value"]
+                    # BUG: otpauth qr code generated does no work and is too big for terminals
+                if "googleurl" in detail:
+                    otp_link = detail["googleurl"]["value"]
+                    qr = generate_qr(otp_link)
+                    self.pamh.conversation(self.pamh.Message(self.pamh.PAM_TEXT_INFO, qr))
+                if otp_link:
+                    otp_web_render = "\nPlease visit the following link to get the QR Code: \n\n"
+                    otp_web_render += "https://www.google.com/chart?chs=200x200&chld=M|0&cht=qr&chl=" + urllib.quote(otp_link) + "\n\n"
+                    self.pamh.conversation(self.pamh.Message(self.pamh.PAM_TEXT_INFO, otp_web_render))
                 return True
         else:
             raise Exception(result.get("error").get("message"))
@@ -337,6 +376,9 @@ class Authenticator(object):
                                     transaction_id, message,
                                     attributes)
                         else:
+                            # Special for Push
+                            if detail["type"] == 'push':
+                                message += ' and Press ENTER'
                             rval = self.challenge_response(transaction_id,
                                                            message,
                                                            attributes)
@@ -792,3 +834,7 @@ def sql_abstract(sql_statement):
         return sql_statement
     else:
         return sql_statement.replace('?','%s')
+
+def generate_qr(data):
+    qr = pyqrcode.create(data, error='L')
+    return str(qr.terminal(quiet_zone=4, module_color='reverse', background='default'))
