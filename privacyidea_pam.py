@@ -196,7 +196,7 @@ class Authenticator(object):
         pam_message_choice = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_ON,
                 "Please choose the token to generate:\n"
                 "[1] Email\n"
-                "[2] Push (Android Only)\n"
+                "[2] Push\n"
                 "[3] Google Authenticator\n")
         response_choice = self.pamh.conversation(pam_message_choice)
         syslog.syslog(syslog.LOG_DEBUG,
@@ -242,14 +242,14 @@ class Authenticator(object):
                         "You don't any have token yet.")
         info = self.pamh.conversation(pam_message)
         # Token type choosing
-        data = self.set_token_type()
+        enroll_data = self.set_token_type()
         # Ask for pin
-        data["pin"] = self.set_pin()
+        enroll_data["pin"] = self.set_pin()
 
         if self.realm:
-            data["realm"] = self.realm
+            enroll_data["realm"] = self.realm
 
-        json_response = self.make_request(data, endpoint="/token/init",
+        json_response = self.make_request(enroll_data, endpoint="/token/init",
                                             api_token=self.api_token)
 
         result = json_response.get("result")
@@ -266,9 +266,10 @@ class Authenticator(object):
                 otp_link = False
                 if "pushurl" in detail:
                     otp_link = detail["pushurl"]["value"]
-                    # BUG: otpauth qr code generated does no work and is too big for terminals
                 if "googleurl" in detail:
                     otp_link = detail["googleurl"]["value"]
+                # BUG: otpauth qr code generated does no work and is too big for terminals
+                if enroll_data["type"] == "totp":
                     qr = generate_qr(otp_link)
                     self.pamh.conversation(self.pamh.Message(self.pamh.PAM_TEXT_INFO, qr))
                 if otp_link:
