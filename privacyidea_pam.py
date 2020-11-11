@@ -52,6 +52,7 @@ import mysql.connector
 import re
 import pyqrcode
 import urllib
+import pwd
 
 SQLite = True
 
@@ -102,6 +103,11 @@ class Authenticator(object):
     def __init__(self, pamh, config):
         self.pamh = pamh
         self.user = pamh.get_user(None)
+        self.username = self.user
+        self.user_attribute = config.get("user_attribute", False)
+        # User attribute for authentication if not username
+        if self.user_attribute:
+            self.get_user_attribute()
         self.rhost = pamh.rhost
         self.URL = config.get("url", "https://localhost")
         self.sslverify = not config.get("nosslverify", False)
@@ -114,6 +120,13 @@ class Authenticator(object):
         self.debug = config.get("debug")
         self.api_token = config.get("api_token")
         self.sql = config.get("sql")
+
+    # Return the pwd attribute to use for auth and override username
+    def get_user_attribute(self):
+        user_pwnam = pwd.getpwnam(self.user)
+        self.user = getattr(user_pwnam, "pw_" + self.user_attribute)
+        syslog.syslog(syslog.LOG_DEBUG,
+                      "%s: Using user attribute as username: %s" % (__name__, self.user))
 
     def make_request(self, data, endpoint="/validate/check",
                         api_token=None, post=True):
@@ -137,9 +150,9 @@ class Authenticator(object):
         return json_response
 
 
-    def check_user_filtering(self, user, user_filter):
+    def check_user_filtering(self, user, username, user_filter):
         if len(user_filter)>0:
-            if user in user_filter:
+            if user in user_filter or username in user_filter:
                 syslog.syslog(syslog.LOG_DEBUG,
                     "User %s requires 2FA" % user)
                 return False
@@ -199,10 +212,6 @@ class Authenticator(object):
                 "[2] Push\n"
                 "[3] Google Authenticator\n")
         response_choice = self.pamh.conversation(pam_message_choice)
-        syslog.syslog(syslog.LOG_DEBUG,
-              "%s: Choice %s" % (__name__, response_choice.resp))
-        syslog.syslog(syslog.LOG_DEBUG,
-              "%s: Choice %s" % (__name__, type(response_choice.resp)))
         if response_choice.resp == "1":
             enroll_data["type"] = "email"
             enroll_data["dynamic_email"] = 1
@@ -377,9 +386,6 @@ class Authenticator(object):
                                     transaction_id, message,
                                     attributes)
                         else:
-                            # Special for Push
-                            if detail["type"] == 'push':
-                                message += ' and Press ENTER'
                             rval = self.challenge_response(transaction_id,
                                                            message,
                                                            attributes)
@@ -525,7 +531,7 @@ def pam_sm_authenticate(pamh, flags, argv):
         return rval
 
     # Check if user is excluded
-    if Auth.check_user_filtering(Auth.user, user_filter):
+    if Auth.check_user_filtering(Auth.user, Auth.username, user_filter):
         return pamh.PAM_AUTHINFO_UNAVAIL
 
     try:

@@ -14,15 +14,15 @@ It can take the following parameters:
 
 **url=https://your-server**
 
-   default is https://localhost
+   Default is https://localhost
 
 **debug**
 
-   write debug information to the system log
+   Write debug information to the system log
 
 **realm=yourRealm**
 
-   pass additional realm to privacyidea
+   Pass additional realm to privacyidea
 
 **nosslverify**
 
@@ -40,6 +40,11 @@ It can take the following parameters:
 **grace=<time>**
 
    Grace time in minutes.
+
+**user_attribute=<uid,gid,gecos>**
+
+   Override the username to send to privacyIDEA with an attribute from the
+   user's password entry
 
 **users=<list,of,users>**
 
