@@ -42,11 +42,19 @@ The code is tested in test_pam_module.py
 import json
 import requests
 import syslog
-import sqlite3
 import passlib.hash
 import time
 import traceback
+import datetime
+import yaml
+import sqlite3
+import mysql.connector
+import re
+import pyqrcode
+import urllib
+import pwd
 
+SQLite = True
 
 def _get_config(argv):
     """
@@ -56,13 +64,37 @@ def _get_config(argv):
     :param argv:
     :return: dictionary with the parameters
     """
+    global SQLite
     config = {}
-    for arg in argv:
-        argument = arg.split("=")
-        if len(argument) == 1:
-            config[argument[0]] = True
-        elif len(argument) == 2:
-            config[argument[0]] = argument[1]
+    argv.pop(0)
+    if len(argv) == 1 and "config_file" in argv[0]:
+        with open(argv[0].split("=")[1], "r") as ymlfile:
+            config = yaml.load(ymlfile, Loader=yaml.SafeLoader)
+    else:
+        for arg in argv:
+            argument = arg.split("=")
+            if len(argument) == 1:
+                config[argument[0]] = True
+            elif len(argument) == 2:
+                config[argument[0]] = argument[1]
+    # User filter
+    if config.get("users") is not None:
+        config["users"] = config.get("users").split(',')
+    else:
+        config["users"] = []
+    # SQL Connection type/default
+    if config.get("mysql") is not None:
+        SQLite = False
+        mysql_settings = re.match("mysql://([^:]+):([^@]+)@([^:/]+):([0-9]+)/(.+)", config.get("mysql"))
+        config["sql"] = {
+            'user': mysql_settings.group(1),
+            'password': mysql_settings.group(2),
+            'host': mysql_settings.group(3),
+            'port': mysql_settings.group(4),
+            'database': mysql_settings.group(5)
+        }
+    else:
+        config["sql"] = config.get("sqlfile", "/etc/privacyidea/pam.sqlite")
     return config
 
 
@@ -71,6 +103,12 @@ class Authenticator(object):
     def __init__(self, pamh, config):
         self.pamh = pamh
         self.user = pamh.get_user(None)
+        self.username = self.user
+        self.user_attribute = config.get("user_attribute", False)
+        # User attribute for authentication if not username
+        if self.user_attribute:
+            self.get_user_attribute()
+        self.rhost = pamh.rhost
         self.URL = config.get("url", "https://localhost")
         self.sslverify = not config.get("nosslverify", False)
         cacerts = config.get("cacerts")
@@ -80,12 +118,28 @@ class Authenticator(object):
             self.sslverify = cacerts
         self.realm = config.get("realm")
         self.debug = config.get("debug")
-        self.sqlfile = config.get("sqlfile", "/etc/privacyidea/pam.sqlite")
+        self.api_token = config.get("api_token")
+        self.sql = config.get("sql")
 
-    def make_request(self, data, endpoint="/validate/check"):
+    # Return the pwd attribute to use for auth and override username
+    def get_user_attribute(self):
+        user_pwnam = pwd.getpwnam(self.user)
+        self.user = getattr(user_pwnam, "pw_" + self.user_attribute)
+        syslog.syslog(syslog.LOG_DEBUG,
+                      "%s: Using user attribute as username: %s" % (__name__, self.user))
+
+    def make_request(self, data, endpoint="/validate/check",
+                        api_token=None, post=True):
         # add a user-agent to be displayed in the Client Application Type
         headers = {'user-agent': 'PAM/2.15.0'}
-        response = requests.post(self.URL + endpoint, data=data,
+        if api_token:
+            headers["Authorization"] = api_token
+
+        if post:
+            response = requests.post(self.URL + endpoint, data=data,
+                                 headers=headers, verify=self.sslverify)
+        else:
+            response = requests.get(self.URL + endpoint, data=data,
                                  headers=headers, verify=self.sslverify)
 
         json_response = response.json
@@ -95,17 +149,159 @@ class Authenticator(object):
 
         return json_response
 
+
+    def check_user_filtering(self, user, username, user_filter):
+        if len(user_filter)>0:
+            if user in user_filter or username in user_filter:
+                syslog.syslog(syslog.LOG_DEBUG,
+                    "User %s requires 2FA" % user)
+                return False
+            else:
+                syslog.syslog(syslog.LOG_DEBUG,
+                    "User %s does not require 2FA" % user)
+                return True
+        else:
+            syslog.syslog(syslog.LOG_DEBUG,
+                "No User filtering")
+            return False
+
+    def check_user_tokens(self, user):
+        # Check the tokens of a user
+        syslog.syslog(syslog.LOG_DEBUG,
+                      "%s: Checking tokens for %s" % (__name__, user))
+
+        data = {"user": self.user}
+
+        if self.realm:
+            data["realm"] = self.realm
+
+        try:
+            json_response = self.make_request(data, endpoint="/token",
+                                api_token=self.api_token, post=False)
+
+            result = json_response.get("result")
+            detail = json_response.get("detail")
+
+            if self.debug:
+                syslog.syslog(syslog.LOG_DEBUG,
+                              "%s: result: %s" % (__name__, result))
+                syslog.syslog(syslog.LOG_DEBUG,
+                              "%s: detail: %s" % (__name__, detail))
+
+            if result.get("status"):
+                if result.get("value"):
+                    token_count = result.get("value").get("count")
+
+                    if token_count == 0:
+                        return self.enroll_user(self.user)
+                    else:
+                        return True
+            else:
+                raise Exception(result.get("error").get("message"))
+
+        except Exception as e:
+            # If the network is not reachable, pass to allow offline auth
+            syslog.syslog(syslog.LOG_DEBUG, "failed to check user's tokens {0!s}".format(e))
+
+    def set_token_type(self):
+        enroll_data = {"user": self.user,
+                        "genkey": "1"}
+        pam_message_choice = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_ON,
+                "Please choose the token to generate:\n"
+                "[1] Email\n"
+                "[2] Push\n"
+                "[3] Google Authenticator\n")
+        response_choice = self.pamh.conversation(pam_message_choice)
+        if response_choice.resp == "1":
+            enroll_data["type"] = "email"
+            enroll_data["dynamic_email"] = 1
+        elif response_choice.resp == "2":
+            enroll_data["type"] = "push"
+        elif response_choice.resp == "3":
+            enroll_data["type"] = "totp"
+        else:
+            pam_message3 = self.pamh.Message(self.pamh.PAM_TEXT_INFO,
+                "Not a valid choice. Please try again")
+            info = self.pamh.conversation(pam_message3)
+            return self.set_token_type()
+        return enroll_data
+
+    def set_pin(self):
+        pam_message1 = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_OFF,
+                        "Please choose a 4-digit minimum PIN: ")
+        response1 = self.pamh.conversation(pam_message1)
+        pam_message2 = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_OFF,
+                        "Confirm your PIN: ")
+        response2 = self.pamh.conversation(pam_message2)
+
+        if response1.resp == response2.resp:
+            return response1.resp
+        else:
+            pam_message3 = self.pamh.Message(self.pamh.PAM_TEXT_INFO,
+                "PINs don't match. Please try again")
+            info = self.pamh.conversation(pam_message3)
+            return self.set_pin()
+
+    def enroll_user(self, user):
+        # Generate a new email Token with the provided pin
+        syslog.syslog(syslog.LOG_DEBUG,
+                      "%s: Generating a new token for %s" % (__name__, user))
+
+        pam_message = self.pamh.Message(self.pamh.PAM_TEXT_INFO,
+                        "You don't any have token yet.")
+        info = self.pamh.conversation(pam_message)
+        # Token type choosing
+        enroll_data = self.set_token_type()
+        # Ask for pin
+        enroll_data["pin"] = self.set_pin()
+
+        if self.realm:
+            enroll_data["realm"] = self.realm
+
+        json_response = self.make_request(enroll_data, endpoint="/token/init",
+                                            api_token=self.api_token)
+
+        result = json_response.get("result")
+        detail = json_response.get("detail")
+
+        if self.debug:
+            syslog.syslog(syslog.LOG_DEBUG,
+                          "%s: result: %s" % (__name__, result))
+            syslog.syslog(syslog.LOG_DEBUG,
+                          "%s: detail: %s" % (__name__, detail))
+        if result.get("status"):
+            if result.get("value"):
+                # Display QR Code if any
+                otp_link = False
+                if "pushurl" in detail:
+                    otp_link = detail["pushurl"]["value"]
+                if "googleurl" in detail:
+                    otp_link = detail["googleurl"]["value"]
+                # BUG: otpauth qr code generated does no work and is too big for terminals
+                if enroll_data["type"] == "totp":
+                    qr = generate_qr(otp_link)
+                    self.pamh.conversation(self.pamh.Message(self.pamh.PAM_TEXT_INFO, qr))
+                if otp_link:
+                    otp_web_render = "\nPlease visit the following link to get the QR Code: \n\n"
+                    otp_web_render += "https://www.google.com/chart?chs=200x200&chld=M|0&cht=qr&chl=" + urllib.quote(otp_link) + "\n\n"
+                    self.pamh.conversation(self.pamh.Message(self.pamh.PAM_TEXT_INFO, otp_web_render))
+                return True
+        else:
+            raise Exception(result.get("error").get("message"))
+
     def offline_refill(self, serial, password):
 
         # get refilltoken
-        conn = sqlite3.connect(self.sqlfile)
-        c = conn.cursor()
+        startdb(self.sql)
         refilltoken = None
         # get all possible serial/tokens for a user
-        for row in c.execute("SELECT refilltoken FROM refilltokens WHERE serial=?",
-                             (serial, )):
+        c.execute(sql_abstract("SELECT refilltoken FROM refilltokens WHERE serial=?"),
+                             (serial, ))
+        for row in c.fetchall():
             refilltoken = row[0]
             syslog.syslog("Doing refill with token {0!s}".format(refilltoken))
+
+        closedb()
 
         if refilltoken:
             data = {"serial": serial,
@@ -125,7 +321,7 @@ class Authenticator(object):
 
             if result.get("status"):
                 if result.get("value"):
-                    save_auth_item(self.sqlfile, self.user, serial, tokentype,
+                    save_auth_item(self.sql, self.user, serial, tokentype,
                                    auth_item)
                     return True
             else:
@@ -136,13 +332,13 @@ class Authenticator(object):
 
     def authenticate(self, password):
         rval = self.pamh.PAM_SYSTEM_ERR
-        # First we try to authenticate against the sqlitedb
-        r, serial = check_offline_otp(self.user, password, self.sqlfile, window=10)
+        # First we try to authenticate against the sqldb
+        r, serial = check_offline_otp(self.sql, self.user, password, window=10)
         syslog.syslog(syslog.LOG_DEBUG, "offline check returned: {0!s}, {1!s}".format(r, serial))
         if r:
             syslog.syslog(syslog.LOG_DEBUG,
                           "%s: successfully authenticated against offline "
-                          "database %s" % (__name__, self.sqlfile))
+                          "database" % (__name__))
 
             # Try to refill
             try:
@@ -163,7 +359,6 @@ class Authenticator(object):
                 data["realm"] = self.realm
 
             json_response = self.make_request(data)
-
             result = json_response.get("result")
             auth_item = json_response.get("auth_items")
             detail = json_response.get("detail") or {}
@@ -178,14 +373,14 @@ class Authenticator(object):
             if result.get("status"):
                 if result.get("value"):
                     rval = self.pamh.PAM_SUCCESS
-                    save_auth_item(self.sqlfile, self.user, serial, tokentype,
+                    save_auth_item(self.sql, self.user, serial, tokentype,
                                    auth_item)
                 else:
                     transaction_id = detail.get("transaction_id")
+                    message = detail.get("message").encode("utf-8")
 
                     if transaction_id:
                         attributes = detail.get("attributes") or {}
-                        message = detail.get("message").encode("utf-8")
                         if "u2fSignRequest" in attributes:
                             rval = self.u2f_challenge_response(
                                     transaction_id, message,
@@ -195,12 +390,21 @@ class Authenticator(object):
                                                            message,
                                                            attributes)
                     else:
+                        syslog.syslog(syslog.LOG_ERR,
+                                      "%s: %s" % (__name__, message))
+                        pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, message)
+                        self.pamh.conversation(pam_message)
                         rval = self.pamh.PAM_AUTH_ERR
             else:
+                error_msg = result.get("error").get("message")
                 syslog.syslog(syslog.LOG_ERR,
-                              "%s: %s" % (__name__,
-                                          result.get("error").get("message")))
+                              "%s: %s" % (__name__, error_msg))
+                pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, str(error_msg))
+                self.pamh.conversation(pam_message)
 
+        # Save history
+        save_history_item(self.sql, self.user, self.rhost, serial,
+            (True if rval == self.pamh.PAM_SUCCESS else False))
         return rval
 
     def challenge_response(self, transaction_id, message, attributes):
@@ -300,8 +504,7 @@ class Authenticator(object):
                 rval = self.pamh.PAM_AUTH_ERR
         else:
             syslog.syslog(syslog.LOG_ERR,
-                          "%s: %s" % (__name__,
-                                      result.get("error").get("message")))
+                "%s: %s" % (__name__, result.get("error").get("message")))
 
         return rval
 
@@ -310,33 +513,59 @@ def pam_sm_authenticate(pamh, flags, argv):
     config = _get_config(argv)
     debug = config.get("debug")
     try_first_pass = config.get("try_first_pass")
-    prompt = config.get("prompt", "Your OTP")
+    prompt = config.get("prompt", "Your OTP").replace("_", " ")
+    grace_time = config.get("grace")
+    user_filter = config.get("users")
     if prompt[-1] != ":":
         prompt += ":"
     rval = pamh.PAM_AUTH_ERR
     syslog.openlog(facility=syslog.LOG_AUTH)
 
     Auth = Authenticator(pamh, config)
+
+    # Empty conversation to test password/keyboard_interactive
+    message = pamh.Message(pamh.PAM_TEXT_INFO, " ")
+    response = pamh.conversation(message)
+    if response.resp == '':
+        rval = pamh.PAM_AUTHINFO_UNAVAIL
+        return rval
+
+    # Check if user is excluded
+    if Auth.check_user_filtering(Auth.user, Auth.username, user_filter):
+        return pamh.PAM_AUTHINFO_UNAVAIL
+
     try:
-        if pamh.authtok is None or not try_first_pass:
-            message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
-            response = pamh.conversation(message)
-            pamh.authtok = response.resp
+        if grace_time is not None:
+            syslog.syslog(syslog.LOG_DEBUG,
+                    "Grace period in minutes: %s " % (str(grace_time)))
+            # First we check if grace is authorized
+            if check_last_history(Auth.sql, Auth.user,
+                        Auth.rhost, grace_time, window=10):
+                rval = pamh.PAM_SUCCESS
 
-        if debug and try_first_pass:
-            syslog.syslog(syslog.LOG_DEBUG, "%s: running try_first_pass" %
-                          __name__)
-        rval = Auth.authenticate(pamh.authtok)
+        if rval != pamh.PAM_SUCCESS:
+            # Check if user has tokens
+            Auth.check_user_tokens(Auth.user)
 
-        # If the first authentication did not succeed but we have
-        # try_first_pass, we ask again for a password:
-        if rval != pamh.PAM_SUCCESS and try_first_pass:
-            # Now we give it a second try:
-            message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
-            response = pamh.conversation(message)
-            pamh.authtok = response.resp
+            if pamh.authtok is None or not try_first_pass:
+                message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
+                response = pamh.conversation(message)
+                pamh.authtok = response.resp
 
+            if debug and try_first_pass:
+                syslog.syslog(syslog.LOG_DEBUG, "%s: running try_first_pass" %
+                              __name__)
             rval = Auth.authenticate(pamh.authtok)
+
+            # If the first authentication did not succeed but we have
+            # try_first_pass, we ask again for a password:
+            if rval != pamh.PAM_SUCCESS and try_first_pass:
+                # Now we give it a second try:
+                message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
+                response = pamh.conversation(message)
+                pamh.authtok = response.resp
+
+                rval = Auth.authenticate(pamh.authtok)
 
     except Exception as exx:
         syslog.syslog(syslog.LOG_ERR, traceback.format_exc())
@@ -373,34 +602,36 @@ def pam_sm_chauthtok(pamh, flags, argv):
     return pamh.PAM_SUCCESS
 
 
-def check_offline_otp(user, otp, sqlfile, window=10, refill=True):
+def check_offline_otp(sql_params, user, otp, window=10, refill=True):
     """
     compare the given otp values with the next hashes of the user.
 
     DB entries older than the matching counter will be deleted from the
     database.
 
+    :param sql_params: MySQL/SQLite connection parameters
+    :type sql_params: dict
     :param user: The local user in the sql file
     :param otp: The otp value
-    :param sqlfile: The sqlite file
     :return: Tuple of (True or False, serial)
     """
     res = False
-    conn = sqlite3.connect(sqlfile)
-    c = conn.cursor()
-    _create_table(c)
+    startdb(sql_params)
     # get all possible serial/tokens for a user
     serials = []
     matching_serial = None
-    for row in c.execute("SELECT serial, user FROM authitems WHERE user=?"
-                         "GROUP by serial", (user,)):
+
+    c.execute(sql_abstract("SELECT serial, user FROM authitems WHERE user=?"
+                         "GROUP by serial"), (user,))
+    for row in c.fetchall():
         serials.append(row[0])
 
     for serial in serials:
-        for row in c.execute("SELECT counter, user, otp, serial FROM authitems "
+        c.execute(sql_abstract("SELECT counter, user, otp, serial FROM authitems "
                              "WHERE user=? and serial=? ORDER by counter "
-                             "LIMIT ?",
-                             (user, serial, window)):
+                             "LIMIT ?"),
+                             (user, serial, window))
+        for row in c.fetchall():
             hash_value = row[2]
             if passlib.hash.pbkdf2_sha512.verify(otp, hash_value):
                 res = True
@@ -410,24 +641,24 @@ def check_offline_otp(user, otp, sqlfile, window=10, refill=True):
 
     # We found a matching password, so we remove the old entries
     if res:
-        c.execute("DELETE from authitems WHERE counter <= ? and serial = ?",
+        c.execute(sql_abstract("DELETE from authitems WHERE counter <= ? and serial = ?"),
                   (matching_counter, matching_serial))
-        conn.commit()
-    conn.close()
+
+    closedb()
     return res, matching_serial
 
 
-def save_auth_item(sqlfile, user, serial, tokentype, authitem):
+def save_auth_item(sql_params, user, serial, tokentype, authitem):
     """
-    Save the given authitem to the sqlite file to be used later for offline
+    Save the given authitem to the sqldb file to be used later for offline
     authentication.
 
     There is only one table in it with the columns:
 
         username, counter, otp
 
-    :param sqlfile: An SQLite file. If it does not exist, it will be generated.
-    :type sqlfile: basestring
+    :param sql_params: MySQL/SQLite connection parameters
+    :type sql_params: dict
     :param user: The PAM user
     :param serial: The serial number of the token
     :param tokentype: The type of the token
@@ -436,10 +667,7 @@ def save_auth_item(sqlfile, user, serial, tokentype, authitem):
 
     :return:
     """
-    conn = sqlite3.connect(sqlfile)
-    c = conn.cursor()
-    # Create the table if necessary
-    _create_table(c)
+    startdb(sql_params)
 
     syslog.syslog(syslog.LOG_DEBUG, "%s: offline save authitem: %s" % (
         __name__, authitem))
@@ -448,42 +676,172 @@ def save_auth_item(sqlfile, user, serial, tokentype, authitem):
         tokenowner = offline.get("username")
         for counter, otphash in offline.get("response").items():
             # Insert the OTP hash
-            c.execute("INSERT INTO authitems (counter, user, serial,"
-                      "tokenowner, otp) VALUES (?,?,?,?,?)",
+            c.execute(sql_abstract("INSERT INTO authitems (counter, user, serial,"
+                      "tokenowner, otp) VALUES (?,?,?,?,?)"),
                       (counter, user, serial, tokenowner, otphash))
 
         refilltoken = offline.get("refilltoken")
         # delete old refilltoken
         try:
-            c.execute('DELETE FROM refilltokens WHERE serial=?', (serial,))
+            c.execute(sql_abstract("DELETE FROM refilltokens WHERE serial=?"), (serial,))
         except sqlite3.OperationalError:
             pass
-        c.execute("INSERT INTO refilltokens (serial, refilltoken) VALUES (?,?)",
+        c.execute(sql_abstract("INSERT INTO refilltokens (serial, refilltoken) VALUES (?,?)"),
                   (serial, refilltoken))
 
-    # Save (commit) the changes
-    conn.commit()
+    closedb()
 
-    # We can also close the connection if we are done with it.
-    # Just be sure any changes have been committed or they will be lost.
+def check_last_history(sql_params, user, rhost, grace_time, window=10):
+    """
+    Get the last event for this user.
+
+    If success reset the error counter.
+    If error increment the error counter.
+
+    :param sql_params: MySQL/SQLite connection parameters
+    :type sql_params: dict
+    :param user: The PAM user
+    :param rhost: The PAM user rhost value
+    :param serial: The serial number of the token
+    :param success: Boolean
+
+    :return:
+    """
+    startdb(sql_params)
+
+    res = False
+    events = []
+
+    c.execute(sql_abstract("SELECT user, rhost, serial, last_success, last_error "
+                         "FROM history "
+                         "WHERE user=? AND rhost=? ORDER by last_success "
+                         "LIMIT ?"),
+                         (user, rhost, window))
+    for row in c.fetchall():
+        events.append(row)
+
+    if len(events)>0:
+        for event in events:
+            last_success = event[3]
+            if last_success is not None:
+                # Get the elapsed time in minutes since last success
+                last_success_delta = datetime.datetime.now() - last_success
+                delta = last_success_delta.seconds / 60 + last_success_delta.days * 1440
+                if delta < int(grace_time):
+                    syslog.syslog(syslog.LOG_DEBUG, "%s: Last success : %s , "
+                            "was %s minutes ago and in the grace period" % (
+                            __name__, str(last_success), str(delta)))
+                    res = True
+                    break
+
+            else:
+                syslog.syslog(syslog.LOG_DEBUG, "%s: No last success recorded: %s" % (
+                    __name__, user))
+    else:
+        syslog.syslog(syslog.LOG_DEBUG, "%s: No history for: %s" % (
+            __name__, user))
+
+    closedb()
+    return res
+
+
+def save_history_item(sql_params, user, rhost, serial, success):
+    """
+    Save the given success/error event.
+
+    If success reset the error counter.
+    If error increment the error counter.
+
+    :param sql_params: MySQL/SQLite connection parameters
+    :type sql_params: dict
+    :param user: The PAM user
+    :param rhost: The PAM user rhost value
+    :param serial: The serial number of the token
+    :param success: Boolean
+
+    :return:
+    """
+    startdb(sql_params)
+
+    syslog.syslog(syslog.LOG_DEBUG, "%s: offline save event: %s" % (
+        __name__, ("success" if success else "error")))
+    if success:
+        # Insert the Event
+        c.execute(sql_abstract("REPLACE INTO history (user, rhost, serial,"
+                  "error_counter, last_success) VALUES (?,?,?,?,?)"),
+                  (user, rhost, serial, 0, datetime.datetime.now()))
+    else:
+        # Insert the Event
+        c.execute(sql_abstract("UPDATE history SET error_counter = error_counter + 1, "
+                    " serial = ? , last_error = ? "
+                    " WHERE user = ? AND rhost = ? "),
+                  (serial, datetime.datetime.now(), user, rhost))
+
+        syslog.syslog(syslog.LOG_DEBUG,"Rows affected : %d " % c.rowcount)
+        if c.rowcount == 0:
+            c.execute(sql_abstract("INSERT INTO history (user, rhost, serial,"
+                      "error_counter, last_error) VALUES (?,?,?,?,?)"),
+                      (user, rhost, serial, 1, datetime.datetime.now()))
+
+    closedb()
+
+# Start connection and create cursor
+def startdb(sql_params):
+    global conn, c
+    # Create connection
+    if SQLite:
+        conn = sqlite3.connect(sql_params, detect_types=sqlite3.PARSE_DECLTYPES)
+    else:
+        conn = mysql.connector.connect(**sql_params)
+
+    # Create a cursor object
+    c = conn.cursor()
+    # Create table if does not exist
+    _create_table()
+
+# Commit and close db
+def closedb():
+    # Commit changes
+    conn.commit()
+    # Close connections
     conn.close()
 
-
-def _create_table(c):
+def _create_table():
     """
     Create table if necessary
     :param c: The connection cursor
     """
+    c.execute("CREATE TABLE IF NOT EXISTS authitems "
+              "(counter int, user text, serial text, tokenowner text,"
+              "otp text, tokentype text)")
+    # create refilltokens table
+    c.execute("CREATE TABLE IF NOT EXISTS refilltokens (serial text, refilltoken text)")
+    # create history table
+    c.execute("CREATE TABLE IF NOT EXISTS history "
+              "(user varchar(50), rhost varchar(50), serial text, error_counter int, "
+              "last_success timestamp, last_error timestamp)")
     try:
-        c.execute("CREATE TABLE authitems "
-                  "(counter int, user text, serial text, tokenowner text,"
-                  "otp text, tokentype text)")
+        # create history table
+        c.execute("CREATE TABLE IF NOT EXISTS history "
+                  "(user text, rhost text, serial text, error_counter int, "
+                  "last_success timestamp, last_error timestamp)")
+        c.execute("CREATE UNIQUE INDEX idx_user "
+                    "ON history (user, rhost);")
+    except mysql.connector.Error as err:
+        if err.errno == mysql.connector.errorcode.ER_DUP_KEYNAME:
+            pass
+        else:
+            raise
     except sqlite3.OperationalError:
         pass
 
-    try:
-        # create refilltokens table
-        c.execute("CREATE TABLE refilltokens (serial text, refilltoken text)")
-    except sqlite3.OperationalError:
-        pass
+# Convert an SQLite statement to MySQL
+def sql_abstract(sql_statement):
+    if SQLite:
+        return sql_statement
+    else:
+        return sql_statement.replace('?','%s')
 
+def generate_qr(data):
+    qr = pyqrcode.create(data, error='L')
+    return str(qr.terminal(quiet_zone=4, module_color='reverse', background='default'))

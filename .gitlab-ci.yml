@@ -1,0 +1,36 @@
+stages:
+  - test
+  - build
+  - deploy
+
+tox:
+  stage: test
+  image:
+    name: registry.server.mila.quebec/idt/images/tox:latest
+    entrypoint: [ '/bin/sh', '-c' ]
+  script: tox
+
+package:
+  stage: build
+  image: "python:2.7"
+  only:
+    refs:
+      - master
+  variables:
+    TWINE_USERNAME: "pypi_token"
+    TWINE_REPOSITORY_URL: "https://git.server.mila.quebec/api/v4/projects/83/packages/pypi"
+  before_script:
+    - pip install twine
+  script:
+    - python setup.py sdist bdist_wheel
+    - python -m twine upload dist/*
+
+# Production has to be triggered manually
+update_login_nodes:
+  stage: deploy
+  only:
+    refs:
+      - master
+  variables:
+    ANSIBLE_TAGS: '2fa'
+  trigger: idt/provisioning/environment
