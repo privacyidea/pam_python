@@ -1,4 +1,12 @@
-[![Build Status](https://travis-ci.org/privacyidea/pam_python.svg?branch=master)](https://travis-ci.org/privacyidea/pam_python)
+> **Note**
+> This repository is archived and not under active development.
+>
+> While the `pam_python` library seems to support Python 3 now, it is not 
+> included in major distributions anymore.
+>
+> If You do not need the offline functionality, please use 
+> [`pam_radius`](https://github.com/FreeRADIUS/pam_radius)
+
 
 This module is to be used with http://pam-python.sourceforge.net/.
 It can be used to authenticate with OTP against privacyIDEA. It will also 
