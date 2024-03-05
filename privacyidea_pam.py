@@ -317,6 +317,14 @@ def pam_sm_authenticate(pamh, flags, argv):
     syslog.openlog(facility=syslog.LOG_AUTH)
 
     Auth = Authenticator(pamh, config)
+
+    # Empty conversation to test password/keyboard_interactive
+    message = pamh.Message(pamh.PAM_TEXT_INFO, " ")
+    response = pamh.conversation(message)
+    if response.resp == '':
+        rval = pamh.PAM_AUTHINFO_UNAVAIL
+        return rval
+    
     try:
         if pamh.authtok is None or not try_first_pass:
             message = pamh.Message(pamh.PAM_PROMPT_ECHO_OFF, "%s " % prompt)
@@ -486,4 +494,3 @@ def _create_table(c):
         c.execute("CREATE TABLE refilltokens (serial text, refilltoken text)")
     except sqlite3.OperationalError:
         pass
-
