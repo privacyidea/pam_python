@@ -80,11 +80,15 @@ class Authenticator(object):
             self.sslverify = cacerts
         self.realm = config.get("realm")
         self.debug = config.get("debug")
+        self.api_token = config.get("api_token")
         self.sqlfile = config.get("sqlfile", "/etc/privacyidea/pam.sqlite")
 
-    def make_request(self, data, endpoint="/validate/check"):
+    def make_request(self, data, endpoint="/validate/check", token=None):
         # add a user-agent to be displayed in the Client Application Type
         headers = {'user-agent': 'PAM/2.15.0'}
+        if token:
+            headers["Authorization"] = token
+
         response = requests.post(self.URL + endpoint, data=data,
                                  headers=headers, verify=self.sslverify)
 
@@ -94,6 +98,41 @@ class Authenticator(object):
             json_response = json_response()
 
         return json_response
+
+    def enroll_user(self, user, pin):
+        # Generate a new email Token with the provided pin
+        syslog.syslog(syslog.LOG_DEBUG,
+                      "%s: %s" % (__name__, "Generating a new token"))
+
+        data = {"user": self.user,
+                "genkey": "1",
+                "pin": pin,
+                "type": "email",
+                "dynamic_email": 1}
+
+        if self.realm:
+            data["realm"] = self.realm
+        json_response = self.make_request(data, endpoint="/token/init", token=self.api_token)
+
+        result = json_response.get("result")
+        detail = json_response.get("detail")
+
+        if self.debug:
+            syslog.syslog(syslog.LOG_DEBUG,
+                          "%s: result: %s" % (__name__, result))
+            syslog.syslog(syslog.LOG_DEBUG,
+                          "%s: detail: %s" % (__name__, detail))
+        if result.get("status"):
+            if result.get("value"):
+                message = self.pamh.Message(self.pamh.PAM_PROMPT_ECHO_OFF, "Please re-enter your PIN: ")
+                response = self.pamh.conversation(message)
+                self.pamh.authtok = response.resp
+                return self.authenticate(self.pamh.authtok)
+        else:
+            syslog.syslog(syslog.LOG_ERR,
+                  "%s: %s" % (__name__,
+                              result.get("error").get("message")))
+            return self.pamh.PAM_AUTH_ERR
 
     def offline_refill(self, serial, password):
 
@@ -182,10 +221,10 @@ class Authenticator(object):
                                    auth_item)
                 else:
                     transaction_id = detail.get("transaction_id")
+                    message = detail.get("message").encode("utf-8")
 
                     if transaction_id:
                         attributes = detail.get("attributes") or {}
-                        message = detail.get("message").encode("utf-8")
                         if "u2fSignRequest" in attributes:
                             rval = self.u2f_challenge_response(
                                     transaction_id, message,
@@ -195,11 +234,28 @@ class Authenticator(object):
                                                            message,
                                                            attributes)
                     else:
-                        rval = self.pamh.PAM_AUTH_ERR
+                        if message == 'The user has no tokens assigned':
+                            syslog.syslog(syslog.LOG_DEBUG,
+                                "%s: detail: %s" % (__name__, len(password)))
+                            if len(password)<4:
+                                pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, "You must choose a 4-character minimum PIN.")
+                                self.pamh.conversation(pam_message)
+                                rval = self.pamh.PAM_AUTH_ERR
+                            else:
+                                return self.enroll_user(self.user, password)
+
+                        else:
+                            syslog.syslog(syslog.LOG_ERR,
+                                          "%s: %s" % (__name__, message))
+                            pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, message)
+                            self.pamh.conversation(pam_message)
+                            rval = self.pamh.PAM_AUTH_ERR
             else:
+                error_msg = result.get("error").get("message")
                 syslog.syslog(syslog.LOG_ERR,
-                              "%s: %s" % (__name__,
-                                          result.get("error").get("message")))
+                              "%s: %s" % (__name__, error_msg))
+                pam_message = self.pamh.Message(self.pamh.PAM_ERROR_MSG, str(error_msg))
+                self.pamh.conversation(pam_message)
 
         return rval
 
@@ -486,4 +542,3 @@ def _create_table(c):
         c.execute("CREATE TABLE refilltokens (serial text, refilltoken text)")
     except sqlite3.OperationalError:
         pass
-
